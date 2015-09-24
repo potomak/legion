@@ -22,9 +22,8 @@ I also recently slapped together a lighting talk, with
 
 ## Purpose
 
-Legion's purpose is to make it easy to write distributed computing
-applications which are scalable homogeneously across and unbounded number
-of nodes.
+Legion's purpose is to make it easy to write applications which are
+scalable homogeneously across and unbounded number of nodes.
 
 ### Examples
 
