@@ -42,7 +42,7 @@ module Network.Legion (
   diskPersistence
 ) where
 
-import Prelude hiding (lookup, mapM, readFile, writeFile)
+import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Control.Applicative ((<$>))
 import Control.Concurrent (forkIO)
@@ -66,12 +66,14 @@ import Data.HexString (hexString, fromBytes, toBytes)
 import Data.List.Split (splitOn)
 import Data.Map (Map, empty, insert, delete, lookup, singleton)
 import Data.Maybe (fromJust)
+import Data.Set (Set, fromList)
 import Data.Text (Text)
 import Data.UUID.V1 (nextUUID)
 import Data.Word (Word8, Word64)
 import GHC.Generics (Generic)
 import Network.Legion.Distribution (peerOwns, KeySet, KeyDistribution,
-  update, fromRange, findKey, Peer, PartitionKey(K, unkey))
+  update, fromRange, findKey, Peer, PartitionKey(K, unkey),
+  rebalanceAction, RebalanceAction(Move), member)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
   defaultProtocol, listen, setSocketOption, socket, SockAddr(SockAddrInet,
@@ -80,12 +82,13 @@ import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
 import Network.Socket.ByteString.Lazy (sendAll)
 import System.Directory (removeFile, doesFileExist, getDirectoryContents)
 import qualified Data.ByteString.Char8 as B (pack)
-import qualified Data.Conduit.List as CL (map)
+import qualified Data.Conduit.List as CL (map, filter, consume)
 import qualified Data.HexString as Hex (toText)
 import qualified Data.Map as Map (keys)
+import qualified Data.Set as Set (delete, null)
 import qualified Data.Text as T (unpack)
 import qualified Data.UUID as UUID (toText)
-import qualified Network.Legion.Distribution as KD (empty)
+import qualified Network.Legion.Distribution as KD (empty, delete)
 import qualified System.Log.Logger as L (debugM, warningM, errorM, infoM)
 
 -- $invocation
@@ -128,6 +131,7 @@ makeNewFirstNode = liftIO $ do
   self <- UUID.toText . fromJust <$> nextUUID
   infoM ("My node id is: " ++ show self)
   return NodeState {
+      handoff = Nothing,
       keyspace = update self (fromRange minBound maxBound) KD.empty,
       self
     }
@@ -386,7 +390,7 @@ handlePeerMessage -- StoreState
     msg@PeerMessage {source, messageId, payload = StoreState key state}
   = do
     debugM ("Received StoreState: " ++ show msg)
-    saveState persistence key (Just state)
+    saveState persistence key state
     void $ send cm source (StoreAck messageId)
     return nodeState
 
@@ -477,6 +481,68 @@ handlePeerMessage -- Claim
         keyspace = newKeyspace
       }
 
+handlePeerMessage -- StoreAck
+    Legionary {}
+    nodeState@NodeState {
+        handoff = Just handoff@HandoffState {
+            expectedAcks,
+            targetPeer,
+            handoffRange
+          }
+      }
+    _forwarded
+    cm
+    msg@PeerMessage {
+        payload = StoreAck messageId
+      }
+  = do
+    debugM ("Received StoreAck: " ++ show msg)
+    let newAcks = Set.delete messageId expectedAcks
+    if Set.null newAcks
+      then do
+        (void . send cm targetPeer . Handoff) handoffRange
+        return nodeState {handoff = Nothing}
+      else
+        return nodeState {
+            handoff = Just handoff {
+                expectedAcks = newAcks
+              }
+          }
+
+handlePeerMessage -- StoreAck
+    Legionary {}
+    nodeState@NodeState {
+        handoff = Nothing
+      }
+    _forwarded
+    _cm
+    msg@PeerMessage {
+        payload = StoreAck _
+      }
+  = do
+    warningM
+      $ "We received an unexpected StoreAck. Probably this is because "
+      ++ "this node crashed during a handoff and got restarted, but "
+      ++ "there is an outside chance that it means something is very "
+      ++ "wrong at the network level. The message was: " ++ show msg
+    return nodeState
+
+handlePeerMessage -- Handoff
+    Legionary {}
+    nodeState@NodeState {keyspace, self}
+    _forwarded
+    cm
+    msg@PeerMessage {
+        payload = Handoff keys
+      }
+  = do
+    debugM ("Received Handoff: " ++ show msg)
+    broadcast cm (Claim keys)
+    return nodeState {
+        keyspace = update self keys keyspace
+      }
+    
+
 {- |
   Merge two sources into one source. This is a concurrency abstraction.
   The resulting source will produce items from either of the input sources
@@ -510,7 +576,18 @@ resolveAddr desc =
 -}
 data NodeState = NodeState {
     keyspace :: KeyDistribution,
+    handoff :: Maybe HandoffState,
     self :: Peer
+  }
+
+
+{- |
+  Defines the state of a handoff.
+-}
+data HandoffState = HandoffState {
+    expectedAcks :: Set MessageId,
+    handoffRange :: KeySet,
+    targetPeer :: Peer
   }
 
 
@@ -544,7 +621,7 @@ instance Binary PeerMessage
   cluster and the blacklisting of that node so that it can never re-join.
 -}
 data PeerMessagePayload
-  = StoreState PartitionKey PartitionState
+  = StoreState PartitionKey (Maybe PartitionState)
     -- ^ Tell the receiving node to store the key/state information in
     --   its persistence layer in preparation for a key range ownership
     --   handoff. The receiving node should NOT take ownership of this
@@ -555,7 +632,7 @@ data PeerMessagePayload
     -- ^ Tell the receiving node that a new peer has shown up in the
     --   cluster.  This message should initiate a handoff of some portion
     --   of the receiving node's keyspace to the new peer.
-  | Handoff PartitionKey PartitionKey
+  | Handoff KeySet
     -- ^ Tell the receiving node that we would like it to take over the
     --   identified key range, which should have already been transmitted
     --   using a series of `StoreState` messages.
@@ -725,25 +802,58 @@ requestSink :: (Binary response, Binary request)
   -> ConnectionManager
   -> Sink (Message request response) IO ()
 requestSink l nodeState forwarded cm = do
+  nodeState2 <- liftIO $ rebalance l cm nodeState
   msg <- await
   case msg of
     Just (P peerMsg) -> do
       newNodeState <-
-        lift $ handlePeerMessage l nodeState forwarded cm peerMsg
+        lift $ handlePeerMessage l nodeState2 forwarded cm peerMsg
       requestSink l newNodeState forwarded cm
     Just (R ((key, request), respond)) ->
-      case findKey key (keyspace nodeState) of
+      case findKey key (keyspace nodeState2) of
         Nothing -> do
           errorM
             $ "Keyspace does not contain key: " ++ show key ++ ". This "
             ++ "is a very bad thing and probably means a handoff got "
             ++ "messed up. We are dropping the request on the floor."
-          requestSink l nodeState forwarded cm
+          requestSink l nodeState2 forwarded cm
         Just peer -> do
           mid <- lift $ send cm peer (ForwardRequest key (encode request))
-          requestSink l nodeState (insert mid respond forwarded) cm
+          requestSink l nodeState2 (insert mid respond forwarded) cm
     Nothing ->
       return ()
+
+
+{- |
+  Figure out if any rebalancing actions must be taken by this node, and kick
+  them off if so.
+-}
+rebalance :: (MonadIO io)
+  => Legionary request response
+  -> ConnectionManager
+  -> NodeState
+  -> io NodeState
+-- don't start a handoff if there is one already in progress.
+rebalance _ _ ns@NodeState {handoff = Just _} = return ns
+rebalance l cm ns@NodeState {self, keyspace} =
+    case rebalanceAction self keyspace of
+      Nothing -> return ns
+      Just (Move targetPeer keys) -> do
+        allKeys <- liftIO $
+          listKeys (persistence l) $= CL.filter (`member` keys) $$ CL.consume
+        messageIds <- mapM (sendState (persistence l) targetPeer) allKeys
+        return ns {
+            handoff = Just HandoffState {
+                expectedAcks = fromList messageIds,
+                handoffRange = keys,
+                targetPeer
+              },
+            keyspace = KD.delete keys keyspace
+          }
+  where
+    sendState persist peer key = liftIO $ do
+      state <- getState persist key
+      send cm peer (StoreState key state)
 
 
 {- |
@@ -797,7 +907,6 @@ initConnectionManager self selfAddy = liftIO $ do
               let mkSend peer = Send peer payload (const (return ()))
               mapM_ (writeChan chan . mkSend) (Map.keys cmPeers)
               return s
-              
       )
 
     logNoPeer peer msg peers_ = errorM

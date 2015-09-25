@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+
 {- |
   This module defines the data structures and functions used for handling the
   key space distribution.
@@ -7,6 +8,7 @@ module Network.Legion.Distribution (
   PartitionKey(..),
   KeyDistribution,
   KeySet,
+  member,
   Peer,
   empty,
   findKey,
@@ -14,15 +16,20 @@ module Network.Legion.Distribution (
   update,
   delete,
   fromRange,
-  size
+  size,
+  rebalanceAction,
+  RebalanceAction(..)
 ) where
 
-import Prelude hiding (lookup, map)
+import Prelude hiding (lookup, map, null, take)
 
 import Control.Applicative ((<$>))
+import Control.Arrow ((&&&))
 import Data.Binary (Binary(put, get))
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
-import Data.Map (Map, toList, lookup, alter, map)
+import Data.Function (on)
+import Data.List (sortBy)
+import Data.Map (Map, toList, lookup, alter, map, null)
 import Data.Maybe (fromMaybe)
 import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
   BoundaryAbove, BoundaryAboveAll, BoundaryBelowAll), makeRangedSet,
@@ -172,8 +179,69 @@ toI = toInteger . unkey
 
 
 {- |
+  Opposite of `toI`
+-}
+fromI :: Integer -> PartitionKey
+fromI = K . fromInteger
+
+
+{- |
   The way to identify a peer.
 -}
 type Peer = Text
 
+
+{- |
+  Return the best action, if any that the indicated peer should take to
+  rebalance an unbalanced keyspace.
+-}
+rebalanceAction :: Peer -> KeyDistribution -> Maybe RebalanceAction
+rebalanceAction _ dist | null (unD dist) = Nothing
+rebalanceAction peer dist =
+  case sortBy (compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of
+    (p, keyspace):remaining@(_:_) | p == peer -> 
+      let (target, targetSpace) = last remaining in
+      if size keyspace > size targetSpace
+        then Just $
+          Move
+            target
+            (take ((size keyspace - size targetSpace) `div` 2) keyspace)
+        else Nothing
+
+    _ -> Nothing
+
+
+{- |
+  The actions that are taken in order to build a balanced cluster.
+-}
+data RebalanceAction = Move Peer KeySet
+
+
+{- |
+  Take the first n values from a KeySet.
+-}
+take :: Integer -> KeySet -> KeySet
+take num set =
+    S $ doTake num [] (rSetRanges (unS set))
+  where
+    doTake 0 acc _ = makeRangedSet acc
+    doTake _ acc [] = makeRangedSet acc
+    doTake n acc (first:remaining)
+      | rangeSize first >= n =
+          doTake (n - rangeSize first) (acc ++ [first]) remaining
+      | otherwise =
+          makeRangedSet (acc ++ [takeRange n first])
+
+    takeRange
+      :: Integer
+      -> Range PartitionKey
+      -> Range PartitionKey
+    takeRange n (Range BoundaryBelowAll b) =
+      takeRange n (Range (BoundaryBelow minBound) b)
+    takeRange n (Range BoundaryAboveAll b) =
+      takeRange n (Range (BoundaryAbove minBound) b)
+    takeRange n (Range (BoundaryAbove a) _) =
+      Range (BoundaryAbove a) (BoundaryAbove (fromI (toI a + n)))
+    takeRange n (Range (BoundaryBelow a) _) =
+      Range (BoundaryAbove a) (BoundaryBelow (fromI (toI a + n)))
 
