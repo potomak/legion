@@ -2,17 +2,14 @@
 {-# LANGUAGE DeriveGeneric #-}
 {- |
   Legion is a framework designed to help people implement large-scale
-  distributed services that function using a value-space partitioning
-  strategy, sometimes known as "sharding". Examples of services that
-  rely on value-space partitioning include ElasticSearch, Riak, DynamoDB,
-  and others.
+  distributed stateful services that function using a value-space
+  partitioning strategy, sometimes known as "sharding". Examples of
+  services that rely on value-space partitioning include ElasticSearch,
+  Riak, DynamoDB, and others.
 
   In other words, this framework is an abstraction over partitioning,
   cluster-rebalancing,  node discovery, and request routing, allowing
   the user to focus on request logic and storage strategies.
-
-  In its current alpha state, this framework does not provide data
-  replication, but future milestones do include that goal.
 -}
 
 module Network.Legion (
@@ -630,8 +627,7 @@ data PeerMessagePayload
     -- ^ Acknowledge the successful handling of a `StoreState` message.
   | NewPeer ClusterId Peer BSockAddr
     -- ^ Tell the receiving node that a new peer has shown up in the
-    --   cluster.  This message should initiate a handoff of some portion
-    --   of the receiving node's keyspace to the new peer.
+    --   cluster.
   | Handoff KeySet
     -- ^ Tell the receiving node that we would like it to take over the
     --   identified key range, which should have already been transmitted
@@ -977,6 +973,12 @@ broadcast cm payload = writeChan (cmChan cm) (Broadcast payload)
 -}
 data StartupMode
   = NewCluster
+    -- ^ Indicates that we should bootstrap a new cluster at startup. The
+    --   persistence layer may be safely pre-populated because the new
+    --   node will claim the entire keyspace. Future plans include
+    --   implementing some safeguards to make sure only one node in
+    --   a cluster was started using this startup mode, but for now,
+    --   we are counting on you, the user, to do the right thing.
 
 
 {- |
