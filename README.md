@@ -6,6 +6,11 @@
         - [Messaging](#messaging)
         - [General Scalability](#general-scalability)
 - [Development Status](#development-status)
+    - [TODO](#todo)
+        - [Connection Manager](#connection-manager)
+        - [Balancing algorithm](#balancing-algorithm)
+        - [Routing](#routing)
+        - [Missing Functionality](#missing-functionality)
 
 
 Legion is a haskell framework that abstracts state partitioning, data
@@ -70,4 +75,37 @@ pure, i.e. it is not in the IO monad, so unless the user does something
 unsafe, then request application should be fully deterministic, allowing
 the graph CRDT to work.
 
+### TODO
+
+#### Connection Manager
+
+- Figure out a way to reliably broadcast, possibly using a gossip protocol
+  or something.
+
+#### Balancing algorithm
+
+- Don't treat the entire keyspace as equal. Balance the cluster according to
+  partition "weight". The simplest implementation could be that a partition has
+  a weight of 1 if it exists and a weight of 0 if it does not exists, but
+  probably something based on the size of the raw partition data would be
+  better. In the future we might also try to figure out a way to calculate a
+  value for "weight" that means "projected CPU load", so we can balance evenly
+  across CPU resources as well as space.
+
+- Think about introducing the idea of node capacity, rather than assuming a
+  strictly homogeneous cluster.
+
+
+#### Routing
+
+- Don't use the network stack to route message locally.
+
+- Maybe don't even use the routing mechanism to handle user requests destined
+  for the local peer.
+
+#### Missing Functionality
+
+- Recovery Startup Mode
+
+- Data Replication
 

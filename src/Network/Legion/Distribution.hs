@@ -40,7 +40,7 @@ import GHC.Generics (Generic)
 import qualified Data.Map as Map (empty)
 
 
-newtype KeyDistribution = D {unD :: Map Peer KeySet}
+newtype KeyDistribution = D {unD :: Map Peer KeySet} deriving (Show)
 
 
 {- |
@@ -108,7 +108,7 @@ update
 update p r =
     D . alter addRange p . unD . delete r
   where
-    addRange Nothing = Just (S rSetEmpty)
+    addRange Nothing = Just r
     addRange (Just rs) =
       Just (rs `union` r)
 
@@ -198,23 +198,23 @@ type Peer = Text
 rebalanceAction :: Peer -> KeyDistribution -> Maybe RebalanceAction
 rebalanceAction _ dist | null (unD dist) = Nothing
 rebalanceAction peer dist =
-  case sortBy (compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of
+  case sortBy (flip compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of
     (p, keyspace):remaining@(_:_) | p == peer -> 
       let (target, targetSpace) = last remaining in
-      if size keyspace > size targetSpace
+      -- Add 100 to give some wiggle room for remainders, etc.
+      if size keyspace > (size targetSpace + 100)
         then Just $
           Move
             target
             (take ((size keyspace - size targetSpace) `div` 2) keyspace)
         else Nothing
-
     _ -> Nothing
 
 
 {- |
   The actions that are taken in order to build a balanced cluster.
 -}
-data RebalanceAction = Move Peer KeySet
+data RebalanceAction = Move Peer KeySet deriving (Show)
 
 
 {- |
@@ -227,7 +227,7 @@ take num set =
     doTake 0 acc _ = makeRangedSet acc
     doTake _ acc [] = makeRangedSet acc
     doTake n acc (first:remaining)
-      | rangeSize first >= n =
+      | rangeSize first < n =
           doTake (n - rangeSize first) (acc ++ [first]) remaining
       | otherwise =
           makeRangedSet (acc ++ [takeRange n first])
@@ -243,5 +243,5 @@ take num set =
     takeRange n (Range (BoundaryAbove a) _) =
       Range (BoundaryAbove a) (BoundaryAbove (fromI (toI a + n)))
     takeRange n (Range (BoundaryBelow a) _) =
-      Range (BoundaryAbove a) (BoundaryBelow (fromI (toI a + n)))
+      Range (BoundaryBelow a) (BoundaryBelow (fromI (toI a + n)))
 

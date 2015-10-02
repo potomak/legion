@@ -24,6 +24,7 @@ library
   -- other-extensions:    
   build-depends:
     Ranged-sets >= 0.3.0 && < 0.4,
+    aeson,
     base >=4.7 && <4.8,
     binary >= 0.7.5 && < 0.8,
     binary-conduit >= 1.2.3 && < 1.3,
@@ -36,6 +37,7 @@ library
     hexstring >= 0.11.1 && < 0.12,
     hslogger >= 1.2.9 && < 1.3,
     network,
+    network-multicast >= 0.1 && < 0.2,
     split >= 0.2.2 && < 0.3,
     stm,
     text,
