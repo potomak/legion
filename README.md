@@ -99,6 +99,12 @@ the graph CRDT to work.
   how to reclaim (or rebuild, once data replication happens) the partitions
   handled by that node.
 
+- Implement the custom node discovery stuff.
+
+- Add some kind of human-readable "cluster name" to the UDP-multicast discovery
+  mechanism, so that multiple developers in the same office won't be joining up
+  to one another (to say nothing of production systems).
+
 
 #### Routing
 
