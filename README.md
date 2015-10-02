@@ -67,8 +67,8 @@ Homogeneously scalable systems generally require:
 ## Development Status
 
 The Legion framework is still under heavy development. Right now I'm
-working on the rebalancing functionality, and I haven't started on
-the data replication part yet. The plan for data replication is encode
+working on the rebalancing functionality, and I haven't started on the
+data replication part yet. The plan for data replication is to encode
 the partition state into a graph-based CRDT, with nodes representing
 individual requests. The signature for the user-implemented requests is
 pure, i.e. it is not in the IO monad, so unless the user does something
@@ -95,6 +95,10 @@ the graph CRDT to work.
 - Think about introducing the idea of node capacity, rather than assuming a
   strictly homogeneous cluster.
 
+- Figure out how and when to eject and blacklist a node from the cluster, and
+  how to reclaim (or rebuild, once data replication happens) the partitions
+  handled by that node.
+
 
 #### Routing
 
@@ -109,3 +113,5 @@ the graph CRDT to work.
 
 - Data Replication
 
+- Think about how we might allow the user-provided request handler to
+  be written in other languages.
