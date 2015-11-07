@@ -20,6 +20,7 @@ library
   exposed-modules:     
     Network.Legion
   other-modules:       
+    Network.Legion.BSockAddr
     Network.Legion.Conduit
     Network.Legion.Distribution
     Network.Legion.MessageId

@@ -51,7 +51,7 @@ import Control.Monad (void, forever, join, (>=>))
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON)
-import Data.Binary (Binary(put, get), encode, decode)
+import Data.Binary (Binary, encode, decode)
 import Data.Bool (bool)
 import Data.ByteString (readFile, writeFile)
 import Data.ByteString.Lazy (ByteString, toStrict, fromStrict)
@@ -65,8 +65,8 @@ import Data.Map (Map, insert, delete, lookup, singleton, alter)
 import Data.Maybe (fromJust)
 import Data.Set (Set, fromList)
 import Data.UUID.V1 (nextUUID)
-import Data.Word (Word8)
 import GHC.Generics (Generic)
+import Network.Legion.BSockAddr (BSockAddr(BSockAddr, getAddr))
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (peerOwns, KeySet, KeyDistribution,
   update, fromRange, findKey, Peer, PartitionKey(K, unkey),
@@ -814,45 +814,6 @@ debugM = liftIO . L.debugM "legion"
 -}
 infoM :: String -> IO ()
 infoM = L.infoM "legion"
-
-
-{- |
-  A type useful only for creating a `Binary` instance of `SockAddr`.
--}
-newtype BSockAddr = BSockAddr {getAddr :: SockAddr} deriving (Show, Eq)
-
-instance Binary BSockAddr where
-  put (BSockAddr addr) =
-    case addr of
-      SockAddrInet p h -> do
-        put (0 :: Word8)
-        put (fromEnum p, h)
-      SockAddrInet6 p f h s -> do
-        put (1 :: Word8)
-        put (fromEnum p, f, h, s)
-      SockAddrUnix s -> do
-        put (2 :: Word8)
-        put s
-      SockAddrCan a -> do
-        put (3 :: Word8)
-        put a
-
-  get = BSockAddr <$> do
-    c <- get
-    case (c :: Word8) of
-      0 -> do
-        (p, h) <- get
-        return (SockAddrInet (toEnum p) h)
-      1 -> do
-        (p, f, h, s) <- get
-        return (SockAddrInet6 (toEnum p) f h s)
-      2 -> SockAddrUnix <$> get
-      3 -> SockAddrCan <$> get
-      _ ->
-        fail
-          $ "Can't decode BSockAddr because the constructor tag "
-          ++ "was not understood. Probably this data is representing "
-          ++ "something else."
 
 
 {- |
