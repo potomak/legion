@@ -40,6 +40,9 @@ import GHC.Generics (Generic)
 import qualified Data.Map as Map (empty)
 
 
+{- |
+  The distribution of partitions and partition replicas among the cluster.
+-}
 newtype KeyDistribution = D {
     unD :: Map Peer KeySet
   } deriving (Show, Binary)
@@ -61,6 +64,11 @@ instance DiscreteOrdered PartitionKey where
   adjacentBelow (K k) = if k == minBound then Nothing else Just (K (pred k))
 
 
+{- |
+  Represents a set of partition keys. This type is intended to have set
+  semantics, but unlike `Data.Set.Set`, it performs well with dense sets
+  because it only stores the set of continuous ranges in memory.
+-}
 newtype KeySet = S {unS :: RSet PartitionKey} deriving (Show)
 
 instance Binary KeySet where
@@ -84,10 +92,16 @@ instance Binary KeySet where
       binToBoundary BinAboveAll = BoundaryAboveAll
 
 
+{- |
+  Constuct a distribution that contains no partitions.
+-}
 empty :: KeyDistribution
 empty = D Map.empty
 
 
+{- |
+  Find the peer that owns the specified partition.
+-}
 findKey :: PartitionKey -> KeyDistribution -> Maybe Peer
 findKey k (D d) =
   case dropWhile (not . member k . snd) (toList d) of
@@ -95,6 +109,9 @@ findKey k (D d) =
     (p, _):_ -> Just p
 
 
+{- |
+  Find all of they keys that the specified peer owns.
+-}
 peerOwns
   :: Peer
   -> KeyDistribution
@@ -102,6 +119,10 @@ peerOwns
 peerOwns p (D d)= fromMaybe (S rSetEmpty) (lookup p d)
 
 
+{- |
+  Update the distribution so that the specified peer owns all of the
+  partitions within the specified key set.
+-}
 update
   :: Peer
   -> KeySet
@@ -115,6 +136,9 @@ update p r =
       Just (rs `union` r)
 
 
+{- |
+  Remove all partitions identified by the key set from the distribution.
+-}
 delete
   :: KeySet
   -> KeyDistribution
@@ -122,20 +146,33 @@ delete
 delete ks = D . map (\\ ks) . unD
 
 
+{- |
+  Construct the set of all partition keys within the specified range. Both the
+  start element and the end element are inclusive.
+-}
 fromRange :: PartitionKey -> PartitionKey -> KeySet
 fromRange a b
   | a > b = fromRange b a
   | otherwise = S (makeRangedSet [Range (BoundaryBelow a) (BoundaryAbove b)])
 
 
+{- |
+  Take the difference of the two sets.
+-}
 (\\) :: KeySet -> KeySet -> KeySet
 S a \\ S b = S (a -!- b)
 
 
+{- |
+  Test for set membership.
+-}
 member :: PartitionKey -> KeySet -> Bool
 member k = flip rSetHas k . unS
 
 
+{- |
+  Take the union of the two sets.
+-}
 union :: KeySet -> KeySet -> KeySet
 union (S a) (S b) = S (a `rSetUnion` b)
 
