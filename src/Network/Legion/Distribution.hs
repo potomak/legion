@@ -6,7 +6,7 @@
 -}
 module Network.Legion.Distribution (
   PartitionKey(..),
-  KeyDistribution,
+  PartitionDistribution,
   KeySet,
   member,
   Peer,
@@ -43,7 +43,7 @@ import qualified Data.Map as Map (empty)
 {- |
   The distribution of partitions and partition replicas among the cluster.
 -}
-newtype KeyDistribution = D {
+newtype PartitionDistribution = D {
     unD :: Map Peer KeySet
   } deriving (Show, Binary)
 
@@ -95,14 +95,14 @@ instance Binary KeySet where
 {- |
   Constuct a distribution that contains no partitions.
 -}
-empty :: KeyDistribution
+empty :: PartitionDistribution
 empty = D Map.empty
 
 
 {- |
   Find the peer that owns the specified partition.
 -}
-findKey :: PartitionKey -> KeyDistribution -> Maybe Peer
+findKey :: PartitionKey -> PartitionDistribution -> Maybe Peer
 findKey k (D d) =
   case dropWhile (not . member k . snd) (toList d) of
     [] -> Nothing
@@ -114,7 +114,7 @@ findKey k (D d) =
 -}
 peerOwns
   :: Peer
-  -> KeyDistribution
+  -> PartitionDistribution
   -> KeySet
 peerOwns p (D d)= fromMaybe (S rSetEmpty) (lookup p d)
 
@@ -126,8 +126,8 @@ peerOwns p (D d)= fromMaybe (S rSetEmpty) (lookup p d)
 update
   :: Peer
   -> KeySet
-  -> KeyDistribution
-  -> KeyDistribution
+  -> PartitionDistribution
+  -> PartitionDistribution
 update p r =
     D . alter addRange p . unD . delete r
   where
@@ -141,8 +141,8 @@ update p r =
 -}
 delete
   :: KeySet
-  -> KeyDistribution
-  -> KeyDistribution
+  -> PartitionDistribution
+  -> PartitionDistribution
 delete ks = D . map (\\ ks) . unD
 
 
@@ -234,7 +234,7 @@ type Peer = Text
   Return the best action, if any that the indicated peer should take to
   rebalance an unbalanced keyspace.
 -}
-rebalanceAction :: Peer -> KeyDistribution -> Maybe RebalanceAction
+rebalanceAction :: Peer -> PartitionDistribution -> Maybe RebalanceAction
 rebalanceAction _ dist | null (unD dist) = Nothing
 rebalanceAction peer dist =
   case sortBy (flip compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of

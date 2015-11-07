@@ -25,7 +25,7 @@ import Data.Text (Text)
 import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr, getAddr))
 import Network.Legion.Conduit (chanToSource)
-import Network.Legion.Distribution (Peer, KeyDistribution)
+import Network.Legion.Distribution (Peer, PartitionDistribution)
 import Network.Legion.MessageId (MessageId)
 import Network.Socket (SockAddr)
 import System.Directory (doesFileExist)
@@ -44,7 +44,7 @@ initJournal
     -- ^ The local peer
   -> Map Peer SockAddr
     -- ^ the known peers and their addresses.
-  -> KeyDistribution
+  -> PartitionDistribution
     -- ^ the initial key distribution.
   -> MessageId
     -- ^ the initial message id.
@@ -65,7 +65,7 @@ initJournal file self peers keyspace nextId = do
 -}
 readJournal
   :: FilePath
-  -> IO (Maybe (Text, Map Peer SockAddr, KeyDistribution, MessageId))
+  -> IO (Maybe (Text, Map Peer SockAddr, PartitionDistribution, MessageId))
 readJournal file =
     doesFileExist file >>= bool (return Nothing) (do
         fileData <- readFile file
@@ -120,7 +120,7 @@ readJournal file =
 data Entry
   = UpdatingPeer Peer BSockAddr
   | UpdatingNextId MessageId
-  | UpdatingKeyspace KeyDistribution
+  | UpdatingKeyspace PartitionDistribution
   deriving (Generic)
 instance Binary Entry
 
@@ -138,7 +138,7 @@ warningM = L.warningM "legion"
 data RecoveryData = R {
     self :: Text,
     peers :: Map Peer BSockAddr,
-    keyspace :: KeyDistribution,
+    keyspace :: PartitionDistribution,
     nextId :: MessageId
   }
   deriving (Generic)

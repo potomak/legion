@@ -66,8 +66,8 @@ import Data.UUID.V1 (nextUUID)
 import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr, getAddr))
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
-import Network.Legion.Distribution (peerOwns, KeySet, KeyDistribution,
-  update, fromRange, findKey, Peer, PartitionKey(K, unkey),
+import Network.Legion.Distribution (peerOwns, KeySet, update, fromRange,
+  PartitionDistribution, findKey, Peer, PartitionKey(K, unkey),
   rebalanceAction, RebalanceAction(Move))
 import Network.Legion.Journal (readJournal, initJournal,
   Entry(UpdatingNextId, UpdatingPeer, UpdatingKeyspace))
@@ -631,7 +631,7 @@ handlePeerMessage -- Handoff
   Defines the local state of a node in the cluster.
 -}
 data NodeState response = NodeState {
-    keyspace :: KeyDistribution,
+    keyspace :: PartitionDistribution,
     handoff :: Maybe HandoffState,
     self :: Peer,
     forwarded :: Map MessageId (response -> IO ()),
