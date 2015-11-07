@@ -1,5 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
-
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {- |
   This module defines the data structures and functions used for handling the
   key space distribution.
@@ -40,7 +40,7 @@ import GHC.Generics (Generic)
 import qualified Data.Map as Map (empty)
 
 
-newtype KeyDistribution = D {unD :: Map Peer KeySet} deriving (Show)
+newtype KeyDistribution = D {unD :: Map Peer KeySet} deriving (Show, Binary)
 
 
 {- |

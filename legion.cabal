@@ -23,6 +23,7 @@ library
     Network.Legion.BSockAddr
     Network.Legion.Conduit
     Network.Legion.Distribution
+    Network.Legion.Journal
     Network.Legion.MessageId
   -- other-extensions:    
   build-depends:

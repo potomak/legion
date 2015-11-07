@@ -109,6 +109,9 @@ the graph CRDT to work.
   mechanism, so that multiple developers in the same office won't be joining up
   to one another (to say nothing of production systems).
 
+- Extend the persistence layer so that it is easier to delete ranges of
+  keys (which happens as a result of rebalancing)
+
 
 #### Routing
 

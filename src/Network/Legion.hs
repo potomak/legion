@@ -54,7 +54,7 @@ import Data.Binary (Binary, encode, decode)
 import Data.Bool (bool)
 import Data.ByteString (readFile, writeFile)
 import Data.ByteString.Lazy (ByteString, toStrict, fromStrict)
-import Data.Conduit (Source, Sink, ($$), await, ($=), yield, await)
+import Data.Conduit (Source, Sink, ($$), ($=), yield, await, awaitForever)
 import Data.Conduit.List (sourceList)
 import Data.Conduit.Network (sourceSocket)
 import Data.Conduit.Serialization.Binary (conduitDecode)
@@ -69,6 +69,8 @@ import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (peerOwns, KeySet, KeyDistribution,
   update, fromRange, findKey, Peer, PartitionKey(K, unkey),
   rebalanceAction, RebalanceAction(Move))
+import Network.Legion.Journal (readJournal, initJournal,
+  Entry(UpdatingNextId, UpdatingPeer, UpdatingKeyspace))
 import Network.Legion.MessageId (MessageId)
 import Network.Multicast (multicastReceiver, multicastSender)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
@@ -120,9 +122,10 @@ runLegionary
     startupMode
     requestSource
   = do
-    nodeState@NodeState {self} <- makeNodeState legionary startupMode
+    (nodeState@NodeState {self, updateJournal}, cmState)
+      <- makeNodeState settings startupMode
     infoM ("The initial node state is: " ++ show nodeState)
-    cm <- initConnectionManager self peerBindAddr
+    cm <- initConnectionManager self cmState updateJournal
     updateClaimState <- forkClaimProc cm nodeState
     let discS = discoverySource discovery self peerBindAddr
         peerS = peerMsgSource settings
@@ -157,45 +160,83 @@ forkClaimProc cm initState = do
   Figure out how to construct the initial node state.
 -}
 makeNodeState
-  :: Legionary request response
+  :: LegionarySettings
   -> StartupMode
-  -> IO (NodeState response)
-makeNodeState _ NewCluster = do
+  -> IO (NodeState response, CMState)
+makeNodeState LegionarySettings {peerBindAddr, journal} NewCluster = do
   -- Build a brand new node state, for the first node in a cluster.
   self <- UUID.toText . fromJust <$> nextUUID
+  let peers = singleton self (Nothing, peerBindAddr)
+  let nextId = minBound
+  let keyspace = update self (fromRange minBound maxBound) KD.empty
+
+  updateJournal <- initJournal journal self (fmap snd peers) keyspace nextId
+        
   infoM ("My node id is: " ++ show self)
   infoM "This is a new cluster."
-  return NodeState {
-      handoff = Nothing,
-      keyspace = update self (fromRange minBound maxBound) KD.empty,
-      self,
-      forwarded = Map.empty,
-      knownPeers = Set.singleton self
-    }
-
-makeNodeState l JoinCluster = do
-  -- Build a brand new node state, for a fresh node joining the cluster.
-  listKeys (persistence l) $$ (do
-      msg <- await
-      case msg of
-        Nothing -> return ()
-        Just _ -> error
-          $ "This is a new node attempting to join an existing cluster. "
-          ++ "Therefore, the persistence layer must be empty or else data "
-          ++ "corruption is pretty much garanteed to happen, but `listKeys` "
-          ++ "indicates that it is not. Maybe you really want to start up in "
-          ++ "node recovery mode."
+  return (
+      NodeState {
+        handoff = Nothing,
+        keyspace,
+        self,
+        forwarded = Map.empty,
+        knownPeers = Set.singleton self,
+        updateJournal
+      },
+      CMState {
+        cmPeers = peers,
+        nextId
+      }
     )
-  self <- UUID.toText . fromJust <$> nextUUID
-  infoM ("My node id is: " ++ show self)
+
+
+makeNodeState LegionarySettings {journal, peerBindAddr} JoinCluster = do
+  -- Build a brand new node state, for a fresh node joining the cluster.
+  mj <- readJournal journal
+  infoM ("Journal was: " ++ show mj)
   infoM "Trying to join an existing cluster."
-  return NodeState {
-      handoff = Nothing,
-      keyspace = KD.empty,
-      self,
-      forwarded = Map.empty,
-      knownPeers = Set.singleton self
-    }
+  case mj of
+    Nothing -> do
+      self <- UUID.toText . fromJust <$> nextUUID
+      infoM ("Starting a new node with node id: " ++ show self)
+      let peers = singleton self (Nothing, peerBindAddr)
+          keyspace = KD.empty
+          nextId = minBound
+      updateJournal <- initJournal journal self (fmap snd peers) keyspace nextId
+      return (
+          NodeState {
+            handoff = Nothing,
+            keyspace,
+            self,
+            forwarded = Map.empty,
+            knownPeers = Set.singleton self,
+            updateJournal
+          },
+          CMState {
+            cmPeers = peers,
+            nextId
+          }
+        )
+    Just (self, peers, keyspace, nextId) -> do
+      updateJournal <- initJournal journal self peers keyspace nextId
+      return (
+          NodeState {
+            handoff = Nothing,
+            keyspace = keyspace,
+            self,
+            forwarded = Map.empty,
+            knownPeers = Set.insert self (fromList (Map.keys peers)),
+            updateJournal
+          },
+          CMState {
+            cmPeers =
+              insert
+                self
+                (Nothing, peerBindAddr)
+                (fmap (\a -> (Nothing, a)) peers),
+            nextId
+          }
+        )
 
 
 {- |
@@ -324,7 +365,8 @@ data LegionarySettings = LegionarySettings {
     peerBindAddr :: SockAddr,
       -- ^ The address on which the legion framework will listen for
       --   rebalancing and cluster management commands.
-    discovery :: DiscoverySettings
+    discovery :: DiscoverySettings,
+    journal :: FilePath
   }
 
 
@@ -506,7 +548,7 @@ handlePeerMessage -- ForwardResponse
 
 handlePeerMessage -- Claim
     Legionary {}
-    nodeState@NodeState {keyspace, self}
+    nodeState@NodeState {keyspace, self, updateJournal}
     _cm
     PeerMessage {
         payload = Claim keys,
@@ -517,12 +559,13 @@ handlePeerMessage -- Claim
     -- don't allow someone else to overwrite our ownership.
     let ours = peerOwns self keyspace
     let newKeyspace = update self ours (update source keys keyspace)
+    updateJournal (UpdatingKeyspace newKeyspace)
     return nodeState {
         keyspace = newKeyspace
       }
 
 handlePeerMessage -- StoreAck
-    Legionary {}
+    Legionary {persistence = Persistence {listKeys, saveState}}
     nodeState@NodeState {
         handoff = Just handoff@HandoffState {
             expectedAcks,
@@ -540,6 +583,8 @@ handlePeerMessage -- StoreAck
     if Set.null newAcks
       then do
         (void . send cm targetPeer . Handoff) handoffRange
+        listKeys $= CL.filter (`KD.member` handoffRange)
+          $$ awaitForever (lift . (`saveState` Nothing))
         return nodeState {
             handoff = Nothing,
             keyspace = update targetPeer handoffRange keyspace
@@ -590,11 +635,12 @@ data NodeState response = NodeState {
     handoff :: Maybe HandoffState,
     self :: Peer,
     forwarded :: Map MessageId (response -> IO ()),
-    knownPeers :: Set Peer
+    knownPeers :: Set Peer,
+    updateJournal :: Entry -> IO ()
   }
 
 instance Show (NodeState response) where
-  show (NodeState a b c _ d) = "(NodeState " ++ show (a, b, c, d) ++ ")"
+  show (NodeState a b c _ d _) = "(NodeState " ++ show (a, b, c, d) ++ ")"
 
 {- |
   Defines the state of a handoff.
@@ -824,8 +870,8 @@ requestSink l nodeState cm updateClaims = do
         Nothing -> do
           errorM
             $ "Keyspace does not contain key: " ++ show key ++ ". This "
-            ++ "is a very bad thing and probably means a handoff got "
-            ++ "messed up. We are dropping the request on the floor."
+            ++ "is a very bad thing and probably means there is a bug, "
+            ++ "or else this node has not joined a cluster yet."
           requestSink l nodeState2 cm updateClaims
         Just peer -> do
           mid <- lift $ send cm peer (ForwardRequest key (encode request))
@@ -850,12 +896,13 @@ handleDiscoveryMessage
   -> DiscoveryMessage
   -> IO (NodeState response)
 handleDiscoveryMessage
-    nodeState@NodeState {knownPeers}
+    nodeState@NodeState {knownPeers, updateJournal}
     cm
     msg@(NewPeer peer addy)
   = do
     debugM ("Received NewPeer: " ++ show msg)
     -- add the peer to the list
+    updateJournal (UpdatingPeer peer addy)
     updatePeer cm peer addy
     return nodeState {
         knownPeers = Set.insert peer knownPeers
@@ -910,15 +957,12 @@ rebalance l cm ns@NodeState {self, keyspace} = do
 -}
 initConnectionManager
   :: Peer
-  -> SockAddr
+  -> CMState
+  -> (Entry -> IO ())
   -> IO ConnectionManager
-initConnectionManager self selfAddy = do
+initConnectionManager self initState updateJournal = do
     cmChan <- newChan
-    let cmState = CMState {
-            cmPeers = singleton self (Nothing, selfAddy),
-            nextId = minBound
-          }
-    (forkC "connection manager" . void) (runManager cmChan cmState)
+    (forkC "connection manager" . void) (runManager cmChan initState)
     return ConnectionManager {cmChan}
   where
     {- |
@@ -959,6 +1003,7 @@ initConnectionManager self selfAddy = do
             Send peer payload respond -> do
               -- respond with the message id as soon as we know it,
               -- which is immediately
+              updateJournal (UpdatingNextId (succ nextId))
               respond nextId
               newState <- case lookup peer cmPeers of
                 Nothing -> do
@@ -1097,6 +1142,7 @@ data Message request response
   = P PeerMessage
   | R (RequestMsg request response)
   | D DiscoveryMessage
+
 
 instance Show (Message request response) where
   show (P m) = "(P " ++ show m ++ ")"
