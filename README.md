@@ -11,6 +11,7 @@
         - [Balancing algorithm](#balancing-algorithm)
         - [Routing](#routing)
         - [Missing Functionality](#missing-functionality)
+        - [Code Quality](#code-quality)
 
 
 Legion is a haskell framework that abstracts state partitioning, data
@@ -131,3 +132,16 @@ the graph CRDT to work.
 
 - Think about how we might allow the user-provided request handler to
   be written in other languages.
+
+#### Code Quality
+
+- Factor out all the things that get written to the journal into a
+  `ClusterState` type, and instead of specifically crafting operations
+  to write to the journal, just "update" the journal with the entire
+  cluster state, but have the implementation be smart enough to compute a
+  delta instead of storing the whole thing. This will eliminate the need
+  for the calling side to know how and when the cluster state changes,
+  making the program way more maintainable.
+
+
+-
