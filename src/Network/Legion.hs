@@ -67,7 +67,7 @@ import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr, getAddr))
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (peerOwns, KeySet, update, fromRange,
-  PartitionDistribution, findKey, Peer, PartitionKey(K, unkey),
+  PartitionDistribution, findPartition, Peer, PartitionKey(K, unkey),
   rebalanceAction, RebalanceAction(Move))
 import Network.Legion.Journal (readJournal, initJournal,
   Entry(UpdatingNextId, UpdatingPeer, UpdatingKeyspace))
@@ -866,7 +866,7 @@ requestSink l nodeState cm updateClaims = do
         <- lift $ handlePeerMessage l nodeState2 cm peerMsg
       requestSink l newNodeState cm updateClaims
     Just (R ((key, request), respond)) ->
-      case findKey key (keyspace nodeState2) of
+      case findPartition key (keyspace nodeState2) of
         Nothing -> do
           errorM
             $ "Keyspace does not contain key: " ++ show key ++ ". This "

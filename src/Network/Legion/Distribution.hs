@@ -11,7 +11,7 @@ module Network.Legion.Distribution (
   member,
   Peer,
   empty,
-  findKey,
+  findPartition,
   peerOwns,
   update,
   delete,
@@ -102,8 +102,8 @@ empty = D Map.empty
 {- |
   Find the peer that owns the specified partition.
 -}
-findKey :: PartitionKey -> PartitionDistribution -> Maybe Peer
-findKey k (D d) =
+findPartition :: PartitionKey -> PartitionDistribution -> Maybe Peer
+findPartition k (D d) =
   case dropWhile (not . member k . snd) (toList d) of
     [] -> Nothing
     (p, _):_ -> Just p
