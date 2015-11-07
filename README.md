@@ -21,6 +21,10 @@ to implement large and robust distributed data applications.
 Check out https://github.com/taphu/legion-cache for a simple application
 that makes use of the legion framework.
 
+I don't feel that legion is ready to push to hackage yet, but you can check out
+the most recent haddock docs [here](http://void.taphu.net) if you like. They
+might give you a better feel for how legion is meant to be used.
+
 
 I also recently slapped together a lighting talk, with
 [these slides](https://docs.google.com/presentation/d/1XWZp9aPfeIxfgBWoTVUkLOgO5rgS54xZo0F4FgLKu7g/edit?usp=sharing)
