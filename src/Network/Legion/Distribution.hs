@@ -8,6 +8,7 @@ module Network.Legion.Distribution (
   PartitionKey(..),
   PartitionDistribution,
   KeySet,
+  Replica(..),
   member,
   Peer,
   empty,
@@ -21,15 +22,14 @@ module Network.Legion.Distribution (
   RebalanceAction(..)
 ) where
 
-import Prelude hiding (lookup, map, null, take)
+import Prelude hiding (lookup, take)
 
 import Control.Applicative ((<$>))
-import Control.Arrow ((&&&))
 import Data.Binary (Binary(put, get))
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
 import Data.Function (on)
 import Data.List (sortBy)
-import Data.Map (Map, toList, lookup, alter, map, null)
+import Data.Map (Map, toList, lookup, adjust, singleton, unionWith)
 import Data.Maybe (fromMaybe)
 import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
   BoundaryAbove, BoundaryAboveAll, BoundaryBelowAll), makeRangedSet,
@@ -37,15 +37,22 @@ import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
   DiscreteOrdered(adjacent, adjacentBelow))
 import Data.Text (Text)
 import GHC.Generics (Generic)
-import qualified Data.Map as Map (empty)
+import qualified Data.Map as Map (empty, union, foldr)
 
 
 {- |
   The distribution of partitions and partition replicas among the cluster.
 -}
 newtype PartitionDistribution = D {
-    unD :: Map Peer KeySet
+    unD :: Map Peer (Map Replica KeySet)
   } deriving (Show, Binary)
+
+
+{- |
+  Enumerate the individual replicas.
+-}
+data Replica = R1 | R2 | R3 deriving (Eq, Ord, Show, Enum, Bounded, Generic)
+instance Binary Replica
 
 
 {- |
@@ -104,7 +111,8 @@ empty = D Map.empty
 -}
 findPartition :: PartitionKey -> PartitionDistribution -> Maybe Peer
 findPartition k (D d) =
-  case dropWhile (not . member k . snd) (toList d) of
+  let list = [(p, ks) | (p, kss) <- toList d, (_r, ks) <- toList kss] in
+  case dropWhile (not . member k . snd) list of
     [] -> Nothing
     (p, _):_ -> Just p
 
@@ -115,8 +123,8 @@ findPartition k (D d) =
 peerOwns
   :: Peer
   -> PartitionDistribution
-  -> KeySet
-peerOwns p (D d)= fromMaybe (S rSetEmpty) (lookup p d)
+  -> Map Replica KeySet
+peerOwns p (D d) = fromMaybe Map.empty (lookup p d)
 
 
 {- |
@@ -125,25 +133,23 @@ peerOwns p (D d)= fromMaybe (S rSetEmpty) (lookup p d)
 -}
 update
   :: Peer
-  -> KeySet
+  -> Map Replica KeySet
   -> PartitionDistribution
   -> PartitionDistribution
-update p r =
-    D . alter addRange p . unD . delete r
-  where
-    addRange Nothing = Just r
-    addRange (Just rs) =
-      Just (rs `union` r)
+update p r ks =
+  (D . unionWith Map.union (singleton p r) . unD)
+    (foldr (uncurry delete) ks (toList r))
 
 
 {- |
   Remove all partitions identified by the key set from the distribution.
 -}
 delete
-  :: KeySet
+  :: Replica
+  -> KeySet
   -> PartitionDistribution
   -> PartitionDistribution
-delete ks = D . map (\\ ks) . unD
+delete r ks = D . fmap (adjust (\\ ks) r) . unD
 
 
 {- |
@@ -154,6 +160,13 @@ fromRange :: PartitionKey -> PartitionKey -> KeySet
 fromRange a b
   | a > b = fromRange b a
   | otherwise = S (makeRangedSet [Range (BoundaryBelow a) (BoundaryAbove b)])
+
+
+{- |
+  Construct an empty `KeySet`.
+-}
+emptyKS :: KeySet
+emptyKS = S rSetEmpty
 
 
 {- |
@@ -231,29 +244,67 @@ type Peer = Text
 
 
 {- |
-  Return the best action, if any that the indicated peer should take to
-  rebalance an unbalanced keyspace.
+  Return the best action, if any, that the indicated peer should take to
+  rebalance an unbalanced distribution.
 -}
 rebalanceAction :: Peer -> PartitionDistribution -> Maybe RebalanceAction
-rebalanceAction _ dist | null (unD dist) = Nothing
-rebalanceAction peer dist =
-  case sortBy (flip compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of
-    (p, keyspace):remaining@(_:_) | p == peer -> 
-      let (target, targetSpace) = last remaining in
-      -- Add 100 to give some wiggle room for remainders, etc.
-      if size keyspace > (size targetSpace + 100)
-        then Just $
-          Move
-            target
-            (take ((size keyspace - size targetSpace) `div` 2) keyspace)
-        else Nothing
-    _ -> Nothing
+rebalanceAction peer (D dist) = 
+    -- TODO: first figure out if any replicas need re-building.
+    case sortBy (weight `on` snd) (toList dist) of
+      (p, keyspace):remaining@(_:_) | p == peer ->
+        let (target, targetSpace) = last remaining 
+            {- |
+              Keys that already exist at the target, no matter what
+              replica, are not eligible for being moved.
+            -}
+            targetKeys = Map.foldr union emptyKS targetSpace
+            eligibleSpace = fmap (\\ targetKeys) keyspace
+            migrationSize = (weightOf keyspace - weightOf targetSpace) `div` 2
+            migrants = pickMigrants migrationSize eligibleSpace
+        in
+        case migrants of
+          Just (replica, keys) -> Just (Move target replica keys)
+          Nothing -> Nothing
+      _ -> Nothing
+  where
+    weight
+      :: Map Replica KeySet
+      -> Map Replica KeySet
+      -> Ordering
+    weight = flip compare `on` weightOf
+
+    weightOf :: Map Replica KeySet -> Integer
+    weightOf = Map.foldr (+) 0 . fmap size
+
+    pickMigrants :: Integer -> Map Replica KeySet -> Maybe (Replica, KeySet)
+    pickMigrants n keyspace =
+      case sortBy (flip compare `on` size . snd) (toList keyspace) of
+        (r, ks):_ ->
+          let migrants = take n ks in
+          if size migrants > 0
+            then Just (r, migrants)
+            else Nothing 
+        _ -> Nothing
+
+  -- case sortBy (flip compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of
+  --   (p, keyspace):remaining@(_:_) | p == peer -> 
+  --     let (target, targetSpace) = last remaining in
+  --     -- Add 100 to give some wiggle room for remainders, etc.
+  --     if size keyspace > (size targetSpace + 100)
+  --       then Just $
+  --         Move
+  --           target
+  --           (take ((size keyspace - size targetSpace) `div` 2) keyspace)
+  --       else Nothing
+  --   _ -> Nothing
 
 
 {- |
   The actions that are taken in order to build a balanced cluster.
 -}
-data RebalanceAction = Move Peer KeySet deriving (Show)
+data RebalanceAction
+  = Move Peer Replica KeySet
+  deriving (Show)
 
 
 {- |
@@ -266,10 +317,12 @@ take num set =
     doTake 0 acc _ = makeRangedSet acc
     doTake _ acc [] = makeRangedSet acc
     doTake n acc (first:remaining)
-      | rangeSize first < n =
-          doTake (n - rangeSize first) (acc ++ [first]) remaining
-      | otherwise =
-          makeRangedSet (acc ++ [takeRange n first])
+        | firstSize <= n =
+            doTake (n - firstSize) (acc ++ [first]) remaining
+        | otherwise =
+            makeRangedSet (acc ++ [takeRange n first])
+      where
+        firstSize = rangeSize first
 
     takeRange
       :: Integer
@@ -283,4 +336,5 @@ take num set =
       Range (BoundaryAbove a) (BoundaryAbove (fromI (toI a + n)))
     takeRange n (Range (BoundaryBelow a) _) =
       Range (BoundaryBelow a) (BoundaryBelow (fromI (toI a + n)))
+
 

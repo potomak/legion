@@ -68,7 +68,7 @@ import Network.Legion.BSockAddr (BSockAddr(BSockAddr, getAddr))
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (peerOwns, KeySet, update, fromRange,
   PartitionDistribution, findPartition, Peer, PartitionKey(K, unkey),
-  rebalanceAction, RebalanceAction(Move))
+  rebalanceAction, RebalanceAction(Move), Replica(R1))
 import Network.Legion.Journal (readJournal, initJournal,
   Entry(UpdatingNextId, UpdatingPeer, UpdatingKeyspace))
 import Network.Legion.MessageId (MessageId)
@@ -167,8 +167,9 @@ makeNodeState LegionarySettings {peerBindAddr, journal} NewCluster = do
   -- Build a brand new node state, for the first node in a cluster.
   self <- UUID.toText . fromJust <$> nextUUID
   let peers = singleton self (Nothing, peerBindAddr)
-  let nextId = minBound
-  let keyspace = update self (fromRange minBound maxBound) KD.empty
+      nextId = minBound
+      initialRange = singleton R1 (fromRange minBound maxBound)
+      keyspace = update self initialRange KD.empty
 
   updateJournal <- initJournal journal self (fmap snd peers) keyspace nextId
 
@@ -548,17 +549,16 @@ handlePeerMessage -- ForwardResponse
 
 handlePeerMessage -- Claim
     Legionary {}
-    nodeState@NodeState {keyspace, self, updateJournal}
+    nodeState@NodeState {keyspace, updateJournal, self}
     _cm
     PeerMessage {
-        payload = Claim keys,
+        payload = Claim claims,
         source
       }
   = do
-
     -- don't allow someone else to overwrite our ownership.
     let ours = peerOwns self keyspace
-    let newKeyspace = update self ours (update source keys keyspace)
+    let newKeyspace = update self ours (update source claims keyspace)
     updateJournal (UpdatingKeyspace newKeyspace)
     return nodeState {
         keyspace = newKeyspace
@@ -570,6 +570,7 @@ handlePeerMessage -- StoreAck
         handoff = Just handoff@HandoffState {
             expectedAcks,
             targetPeer,
+            handoffReplica,
             handoffRange
           },
         keyspace
@@ -582,12 +583,13 @@ handlePeerMessage -- StoreAck
     let newAcks = Set.delete messageId expectedAcks
     if Set.null newAcks
       then do
-        (void . send cm targetPeer . Handoff) handoffRange
+        (void . send cm targetPeer . Handoff handoffReplica) handoffRange
         listKeys $= CL.filter (`KD.member` handoffRange)
           $$ awaitForever (lift . (`saveState` Nothing))
         return nodeState {
             handoff = Nothing,
-            keyspace = update targetPeer handoffRange keyspace
+            keyspace =
+              update targetPeer (singleton handoffReplica handoffRange) keyspace
           }
       else
         return nodeState {
@@ -618,12 +620,14 @@ handlePeerMessage -- Handoff
     nodeState@NodeState {keyspace, self}
     cm
     PeerMessage {
-        payload = Handoff keys
+        payload = Handoff replica keys
       }
   = do
-    broadcast cm (Claim keys)
+    -- TODO this broadcast would be handled by the normal claim process in due
+    -- time. Maybe we should think about letting that process handle this.
+    broadcast cm (Claim (singleton replica keys))
     return nodeState {
-        keyspace = update self keys keyspace
+        keyspace = update self (singleton replica keys) keyspace
       }
     
 
@@ -647,6 +651,7 @@ instance Show (NodeState response) where
 -}
 data HandoffState = HandoffState {
     expectedAcks :: Set MessageId,
+    handoffReplica :: Replica,
     handoffRange :: KeySet,
     targetPeer :: Peer
   } deriving (Show)
@@ -686,11 +691,11 @@ data PeerMessagePayload
     --   key, or start fielding user requests for this key.
   | StoreAck MessageId
     -- ^ Acknowledge the successful handling of a `StoreState` message.
-  | Handoff KeySet
+  | Handoff Replica KeySet
     -- ^ Tell the receiving node that we would like it to take over the
     --   identified key range, which should have already been transmitted
     --   using a series of `StoreState` messages.
-  | Claim KeySet
+  | Claim (Map Replica KeySet)
     -- ^ Announce that the sending node claims the set of keys as its own,
     --   either in response to a `Handoff` message, or else as a general
     --   periodic notification to keep the cluster up to date.
@@ -925,7 +930,7 @@ rebalance l cm ns@NodeState {self, keyspace} = do
     debugM ("The rebalancing action is: " ++ show action)
     case action of
       Nothing -> return ns
-      Just (Move targetPeer keys) -> do
+      Just (Move targetPeer replica keys) -> do
         allKeys <- 
           listKeys (persistence l) $= CL.filter (`KD.member` keys) $$ CL.consume
         messageIds <- mapM (sendState (persistence l) targetPeer) allKeys
@@ -933,18 +938,19 @@ rebalance l cm ns@NodeState {self, keyspace} = do
           [] -> do
             -- There weren't actually any keys to migrate, so short
             -- circuit the handoff.
-            (void . send cm targetPeer . Handoff) keys
+            (void . send cm targetPeer . Handoff replica) keys
             return ns {
-                keyspace = update targetPeer keys keyspace
+                keyspace = update targetPeer (singleton replica keys) keyspace
               }
           _ -> 
             return ns {
                 handoff = Just HandoffState {
                     expectedAcks = fromList messageIds,
+                    handoffReplica = replica,
                     handoffRange = keys,
                     targetPeer
                   },
-                keyspace = KD.delete keys keyspace
+                keyspace = KD.delete replica keys keyspace
               }
   where
     sendState persist peer key = do
