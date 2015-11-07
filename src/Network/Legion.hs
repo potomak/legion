@@ -171,7 +171,7 @@ makeNodeState LegionarySettings {peerBindAddr, journal} NewCluster = do
   let keyspace = update self (fromRange minBound maxBound) KD.empty
 
   updateJournal <- initJournal journal self (fmap snd peers) keyspace nextId
-        
+
   infoM ("My node id is: " ++ show self)
   infoM "This is a new cluster."
   return (

@@ -40,7 +40,9 @@ import GHC.Generics (Generic)
 import qualified Data.Map as Map (empty)
 
 
-newtype KeyDistribution = D {unD :: Map Peer KeySet} deriving (Show, Binary)
+newtype KeyDistribution = D {
+    unD :: Map Peer KeySet
+  } deriving (Show, Binary)
 
 
 {- |
