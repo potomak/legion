@@ -29,7 +29,6 @@ module Network.Legion (
   -- * Framework Configuration
   -- $framework-config
   LegionarySettings(..),
-  AddressDescription,
   DiscoverySettings(..),
   MulticastDiscovery(..),
   CustomDiscovery(..),
@@ -60,7 +59,6 @@ import Data.Conduit.List (sourceList)
 import Data.Conduit.Network (sourceSocket)
 import Data.Conduit.Serialization.Binary (conduitDecode)
 import Data.HexString (hexString, fromBytes, toBytes)
-import Data.List.Split (splitOn)
 import Data.Map (Map, insert, delete, lookup, singleton, alter)
 import Data.Maybe (fromJust)
 import Data.Set (Set, fromList)
@@ -76,8 +74,8 @@ import Network.Multicast (multicastReceiver, multicastSender)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
   defaultProtocol, listen, setSocketOption, socket, SockAddr(SockAddrInet,
-  SockAddrInet6, SockAddrUnix, SockAddrCan), addrAddress, getAddrInfo,
-  close, connect, HostName, PortNumber, Socket)
+  SockAddrInet6, SockAddrUnix, SockAddrCan), close, connect, HostName,
+  PortNumber, Socket)
 import Network.Socket.ByteString (recvFrom, sendTo)
 import Network.Socket.ByteString.Lazy (sendAll)
 import System.Directory (removeFile, doesFileExist, getDirectoryContents)
@@ -121,7 +119,7 @@ runLegionary
   = do
     nodeState@NodeState {self} <- makeNodeState legionary startupMode
     infoM ("The initial node state is: " ++ show nodeState)
-    bindAddr <- BSockAddr <$> resolveAddr peerBindAddr
+    let bindAddr = BSockAddr peerBindAddr
     cm <- initConnectionManager self bindAddr
     updateClaimState <- forkClaimProc cm nodeState
     let discS = discoverySource discovery self bindAddr
@@ -321,21 +319,11 @@ instance Binary PartitionState
   Settings used when starting up the legion framework.
 -}
 data LegionarySettings = LegionarySettings {
-    peerBindAddr :: AddressDescription,
+    peerBindAddr :: SockAddr,
       -- ^ The address on which the legion framework will listen for
       --   rebalancing and cluster management commands.
     discovery :: DiscoverySettings
   }
-
-
-{- |
-  An address description is really just an synonym for a formatted string.
-
-  The only currently supported address address family is: @ipv4@
-
-  Examples: @"ipv4:0.0.0.0:8080"@, @"ipv4:www.google.com:80"@,
--}
-type AddressDescription = String
 
 
 {- |
@@ -593,17 +581,6 @@ handlePeerMessage -- Handoff
     
 
 {- |
-  Resolve an address description into an actual socket addr.
--}
-resolveAddr :: AddressDescription -> IO SockAddr
-resolveAddr desc =
-  case splitOn ":" desc of
-    ["ipv4", name, port] ->
-      addrAddress . head <$> getAddrInfo Nothing (Just name) (Just port)
-    _ -> error ("Invalid address description: " ++ show desc)
-
-
-{- |
   Defines the local state of a node in the cluster.
 -}
 data NodeState response = NodeState {
@@ -697,11 +674,10 @@ instance Binary DiscoveryMessage
 peerMsgSource :: LegionarySettings -> Source IO PeerMessage
 peerMsgSource LegionarySettings {peerBindAddr} = join . lift $
     catch (do
-        bindAddr <- resolveAddr peerBindAddr
         inputChan <- newChan
-        so <- socket (fam bindAddr) Stream defaultProtocol
+        so <- socket (fam peerBindAddr) Stream defaultProtocol
         setSocketOption so ReuseAddr 1
-        bindSocket so bindAddr
+        bindSocket so peerBindAddr
         listen so 5
         (void . forkIO) $ acceptLoop so inputChan
         return (chanToSource inputChan)
