@@ -189,7 +189,6 @@ makeNodeState LegionarySettings {peerBindAddr, journal} NewCluster = do
       }
     )
 
-
 makeNodeState LegionarySettings {journal, peerBindAddr} JoinCluster = do
   -- Join a cluster by either starting fresh, or recovering from a
   -- shutdown or crash.
