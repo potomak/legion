@@ -65,11 +65,12 @@ import Data.Map (Map, insert, delete, lookup, singleton, alter)
 import Data.Maybe (fromJust)
 import Data.Set (Set, fromList)
 import Data.UUID.V1 (nextUUID)
-import Data.Word (Word8, Word64)
+import Data.Word (Word8)
 import GHC.Generics (Generic)
 import Network.Legion.Distribution (peerOwns, KeySet, KeyDistribution,
   update, fromRange, findKey, Peer, PartitionKey(K, unkey),
   rebalanceAction, RebalanceAction(Move))
+import Network.Legion.MessageId (MessageId)
 import Network.Multicast (multicastReceiver, multicastSender)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
@@ -640,9 +641,6 @@ data HandoffState = HandoffState {
     handoffRange :: KeySet,
     targetPeer :: Peer
   } deriving (Show)
-
-
-type MessageId = Word64
 
 
 {- |

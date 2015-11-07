@@ -21,6 +21,7 @@ library
     Network.Legion
   other-modules:       
     Network.Legion.Distribution
+    Network.Legion.MessageId
   -- other-extensions:    
   build-depends:
     Ranged-sets >= 0.3.0 && < 0.4,
