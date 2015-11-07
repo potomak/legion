@@ -54,8 +54,8 @@ import Control.Monad.Trans.Class (lift)
 import Data.Aeson (FromJSON)
 import Data.Binary (Binary(put, get), encode, decode)
 import Data.Bool (bool)
-import Data.ByteString.Lazy (ByteString, readFile, writeFile, toStrict,
-  fromStrict)
+import Data.ByteString (readFile, writeFile)
+import Data.ByteString.Lazy (ByteString, toStrict, fromStrict)
 import Data.Conduit (Source, Sink, ($$), await, ($=), yield, await)
 import Data.Conduit.List (sourceList)
 import Data.Conduit.Network (sourceSocket)
@@ -408,15 +408,23 @@ diskPersistence directory = Persistence {
     getState key =
       let path = toPath key in
       doesFileExist path >>= bool
-        ((Just . PartitionState) <$> readFile path)
         (return Nothing)
+        ((Just . PartitionState . fromStrict) <$> readFile path)
 
-    saveState key (Just state) = writeFile (toPath key) (unstate state)
-    saveState key Nothing = removeFile (toPath key)
+    saveState key (Just state) =
+      writeFile (toPath key) (toStrict (unstate state))
+    saveState key Nothing =
+      let path = toPath key in
+      doesFileExist path >>= bool
+        (return ())
+        (removeFile path)
 
     listKeys = do
-      keys <- lift $ fmap fromHex <$> getDirectoryContents directory
-      sourceList keys
+        keys <- lift $ readHexList <$> getDirectoryContents directory
+        sourceList keys
+      where 
+        readHexList = fmap fromHex . filter notSys
+        notSys = not . (`elem` [".", ".."])
 
     {- |
       Convert a key to a path
