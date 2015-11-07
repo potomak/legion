@@ -67,6 +67,7 @@ import Data.Set (Set, fromList)
 import Data.UUID.V1 (nextUUID)
 import Data.Word (Word8)
 import GHC.Generics (Generic)
+import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (peerOwns, KeySet, KeyDistribution,
   update, fromRange, findKey, Peer, PartitionKey(K, unkey),
   rebalanceAction, RebalanceAction(Move))
@@ -592,23 +593,6 @@ handlePeerMessage -- Handoff
     
 
 {- |
-  Merge two sources into one source. This is a concurrency abstraction.
-  The resulting source will produce items from either of the input sources
-  as they become available. As you would expect from a multi-producer,
-  single-consumer concurrency abstraction, the ordering of items produced
-  by each source is consistent relative to other items produced by
-  that same source, but the interleaving of items from both sources
-  is nondeterministic.
--}
-merge :: Source IO a -> Source IO b -> Source IO (Either a b)
-merge left right = do
-  chan <- lift newChan
-  (lift . void . forkIO) (left $= CL.map Left $$ chanToSink chan)
-  (lift . void . forkIO) (right $= CL.map Right $$ chanToSink chan)
-  chanToSource chan
-
-
-{- |
   Resolve an address description into an actual socket addr.
 -}
 resolveAddr :: AddressDescription -> IO SockAddr
@@ -869,26 +853,6 @@ instance Binary BSockAddr where
           $ "Can't decode BSockAddr because the constructor tag "
           ++ "was not understood. Probably this data is representing "
           ++ "something else."
-
-
-{- |
-  Convert a chanel into a Source.
--}
-chanToSource :: Chan a -> Source IO a
-chanToSource chan = forever $ yield =<< lift (readChan chan)
-
-
-{- |
- Convert an chanel into a Sink.
--}
-chanToSink :: Chan a -> Sink a IO ()
-chanToSink chan = do
-  val <- await
-  case val of
-    Nothing -> return ()
-    Just v -> do
-      lift (writeChan chan v)
-      chanToSink chan
 
 
 {- |
