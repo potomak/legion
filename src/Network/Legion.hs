@@ -768,8 +768,10 @@ discoverySource (
     self
     selfAddy
   = do
+    -- "rso" means "receiver socket"
     rso <- lift $ multicastReceiver multicastHost multicastPort
     lift . void . forkIO $ do
+      -- "sso" means "sender socket"
       (sso, addr) <- multicastSender multicastHost multicastPort
       let newPeerMsg = toStrict (encode (self, NewPeer self selfAddy))
       forever $ do

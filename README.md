@@ -117,6 +117,9 @@ the graph CRDT to work.
 - Maybe don't even use the routing mechanism to handle user requests destined
   for the local peer.
 
+- When handling `ForwardRequest` messages, make sure to re-forward in case
+  someone forwarded the request to the wrong node.
+
 #### Missing Functionality
 
 - Recovery Startup Mode
