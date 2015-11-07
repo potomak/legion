@@ -24,7 +24,6 @@ module Network.Legion (
   Persistence(..),
   RequestMsg,
   -- * Fundamental Types
-  Peer,
   PartitionKey(..),
   PartitionState(..),
   -- * Framework Configuration
