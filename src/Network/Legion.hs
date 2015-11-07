@@ -79,6 +79,9 @@ import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
 import Network.Socket.ByteString (recvFrom, sendTo)
 import Network.Socket.ByteString.Lazy (sendAll)
 import System.Directory (removeFile, doesFileExist, getDirectoryContents)
+import System.Exit (ExitCode(ExitFailure))
+import System.IO (hPutStrLn, stderr)
+import System.Posix.Process (exitImmediately)
 import qualified Data.ByteString.Char8 as B (pack)
 import qualified Data.Conduit.List as CL (map, filter, consume)
 import qualified Data.HexString as Hex (toText)
@@ -141,7 +144,7 @@ forkClaimProc
   -> IO (NodeState response -> IO ())
 forkClaimProc cm initState = do
     nodeStateT <- atomically (newTVar initState)
-    void . forkIO . forever $ do
+    forkC "claim broadcast" . forever $ do
       threadDelay fiveSeconds
       NodeState {self, keyspace} <- atomically (readTVar nodeStateT)
       broadcast cm (Claim (peerOwns self keyspace))
@@ -208,7 +211,7 @@ forkLegionary :: (Binary response, Binary request)
   -> IO (PartitionKey -> request -> IO response)
 forkLegionary legionary settings startupMode = do
   chan <- newChan
-  (void . forkIO) $
+  forkC "main legion thread" $
     runLegionary legionary settings startupMode (chanToSource chan)
   return (\ key request -> do
       responseVar <- newEmptyMVar
@@ -678,7 +681,7 @@ peerMsgSource LegionarySettings {peerBindAddr} = join . lift $
         setSocketOption so ReuseAddr 1
         bindSocket so peerBindAddr
         listen so 5
-        (void . forkIO) $ acceptLoop so inputChan
+        forkC "peer socket acceptor" $ acceptLoop so inputChan
         return (chanToSource inputChan)
       ) (\err -> do
         errorM
@@ -727,7 +730,7 @@ discoverySource (
   = do
     -- "rso" means "receiver socket"
     rso <- lift $ multicastReceiver multicastHost multicastPort
-    lift . void . forkIO $ do
+    lift . forkC "discovery broadcast" $ do
       -- "sso" means "sender socket"
       (sso, addr) <- multicastSender multicastHost multicastPort
       let newPeerMsg =
@@ -915,7 +918,7 @@ initConnectionManager self selfAddy = do
             cmPeers = singleton self (Nothing, selfAddy),
             nextId = minBound
           }
-    (void . forkIO . void) (runManager cmChan cmState)
+    (forkC "connection manager" . void) (runManager cmChan cmState)
     return ConnectionManager {cmChan}
   where
     {- |
@@ -1100,6 +1103,35 @@ instance Show (Message request response) where
   show (R ((p, _), _)) = "(R ((" ++ show p ++ ", _), _))"
   show (D m) = "(D " ++ show m ++ ")"
 
+
+{- |
+  Forks a critical thread. "Critical" in this case means that if the thread
+  crashes for whatever reason, then the program cannot continue correctly, so
+  we should crash the program instead of running in some kind of zombie broken
+  state.
+-}
+forkC
+  :: String
+    -- ^ The name of the critical thread, used for logging.
+  -> IO ()
+    -- ^ The IO to execute.
+  -> IO ()
+forkC name io =
+  void . forkIO $ do
+    result <- try io
+    case result of
+      Left err -> do
+        let msg =
+              "Exception caught in critical thread " ++ show name
+              ++ ". We are crashing the entire program because we can't "
+              ++ "continue without this thread. The error was: "
+              ++ show (err :: SomeException)
+        -- write the message to every place we can think of.
+        errorM msg
+        putStrLn msg
+        hPutStrLn stderr msg
+        exitImmediately (ExitFailure 1)
+      Right v -> return v
 
 -- tv str a = trace (str ++ ": " ++ show a) a
 

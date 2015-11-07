@@ -45,6 +45,7 @@ library
     stm,
     text,
     transformers,
+    unix >= 2.7 && < 2.8,
     uuid >= 1.3.11 && < 1.4
   hs-source-dirs:      src
   default-language:    Haskell2010
