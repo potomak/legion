@@ -191,7 +191,8 @@ makeNodeState LegionarySettings {peerBindAddr, journal} NewCluster = do
 
 
 makeNodeState LegionarySettings {journal, peerBindAddr} JoinCluster = do
-  -- Build a brand new node state, for a fresh node joining the cluster.
+  -- Join a cluster by either starting fresh, or recovering from a
+  -- shutdown or crash.
   mj <- readJournal journal
   infoM ("Journal was: " ++ show mj)
   infoM "Trying to join an existing cluster."
@@ -1127,10 +1128,9 @@ data StartupMode
     --   a cluster was started using this startup mode, but for now,
     --   we are counting on you, the user, to do the right thing.
   | JoinCluster
-    -- ^ Indicates that a new, virgin, empty node has been spun up and
-    --   should join an existing cluster. It is extremely important that
-    --   nodes being started with this startup mode have a totally empty
-    --   persistence layer.
+    -- ^ Indicates that the node should try to join an existing cluster,
+    --   either by starting fresh, or by recovering from a shutdown
+    --   or crash.
   deriving (Generic)
 instance FromJSON StartupMode
 
