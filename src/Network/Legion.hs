@@ -119,10 +119,9 @@ runLegionary
   = do
     nodeState@NodeState {self} <- makeNodeState legionary startupMode
     infoM ("The initial node state is: " ++ show nodeState)
-    let bindAddr = BSockAddr peerBindAddr
-    cm <- initConnectionManager self bindAddr
+    cm <- initConnectionManager self peerBindAddr
     updateClaimState <- forkClaimProc cm nodeState
-    let discS = discoverySource discovery self bindAddr
+    let discS = discoverySource discovery self peerBindAddr
         peerS = peerMsgSource settings
     (discS `merge` (peerS `merge` requestSource))
       $= CL.map toMessage
@@ -718,7 +717,7 @@ peerMsgSource LegionarySettings {peerBindAddr} = join . lift $
 discoverySource
   :: DiscoverySettings
   -> Peer
-  -> BSockAddr
+  -> SockAddr
   -> Source IO DiscoveryMessage
 discoverySource (
       Multicast MulticastDiscovery {multicastHost, multicastPort}
@@ -731,7 +730,8 @@ discoverySource (
     lift . void . forkIO $ do
       -- "sso" means "sender socket"
       (sso, addr) <- multicastSender multicastHost multicastPort
-      let newPeerMsg = toStrict (encode (self, NewPeer self selfAddy))
+      let newPeerMsg =
+            toStrict (encode (self, NewPeer self (BSockAddr selfAddy)))
       forever $ do
         threadDelay 10000000
         sendTo sso newPeerMsg addr
@@ -907,7 +907,7 @@ rebalance l cm ns@NodeState {self, keyspace} = do
 -}
 initConnectionManager
   :: Peer
-  -> BSockAddr
+  -> SockAddr
   -> IO ConnectionManager
 initConnectionManager self selfAddy = do
     cmChan <- newChan
@@ -923,10 +923,10 @@ initConnectionManager self selfAddy = do
       create a new socket and retry sending the payload. Return whatever the
       "working" socket is.
     -}
-    sendWithRetry :: Maybe Socket -> BSockAddr -> ByteString -> IO Socket
+    sendWithRetry :: Maybe Socket -> SockAddr -> ByteString -> IO Socket
     sendWithRetry Nothing addy payload = do
-      so <- socket (fam (getAddr addy)) Stream defaultProtocol
-      connect so (getAddr addy)
+      so <- socket (fam addy) Stream defaultProtocol
+      connect so addy
       sendWithRetry (Just so) addy payload
 
     sendWithRetry (Just so) addy payload = do
@@ -937,8 +937,8 @@ initConnectionManager self selfAddy = do
             $ "Socket to " ++ show addy ++ " died. Retrying on a new "
             ++ "socket. The error was: " ++ show (err :: SomeException)
           void (try (close so) :: IO (Either SomeException ()))
-          so2 <- socket (fam (getAddr addy)) Stream defaultProtocol
-          connect so2 (getAddr addy)
+          so2 <- socket (fam addy) Stream defaultProtocol
+          connect so2 addy
           sendAll so2 payload
           return so2
         Right _ ->
@@ -993,7 +993,7 @@ initConnectionManager self selfAddy = do
               -- worried because a peer changing addresses is unlikely
               -- to say the least, and impossible to say the most.
               return s {
-                cmPeers = alter (updatePeerEntry addy) peer cmPeers
+                cmPeers = alter (updatePeerEntry (getAddr addy)) peer cmPeers
               }
             Broadcast payload -> do
               let mkSend peer = Send peer payload (const (return ()))
@@ -1028,7 +1028,7 @@ data ConnectionManager =
 -}
 data CMState =
   CMState {
-    cmPeers :: Map Peer (Maybe Socket, BSockAddr),
+    cmPeers :: Map Peer (Maybe Socket, SockAddr),
     nextId :: MessageId
   }
 
