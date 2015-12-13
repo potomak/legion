@@ -7,6 +7,7 @@
 module Network.Legion.Distribution (
   PartitionKey(..),
   PartitionDistribution,
+  PartitionState(..),
   KeySet,
   Replica(..),
   member,
@@ -26,6 +27,7 @@ import Prelude hiding (lookup, take)
 
 import Control.Applicative ((<$>))
 import Data.Binary (Binary(put, get))
+import Data.ByteString.Lazy (ByteString)
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
 import Data.Function (on)
 import Data.List (sortBy)
@@ -35,7 +37,8 @@ import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
   BoundaryAbove, BoundaryAboveAll, BoundaryBelowAll), makeRangedSet,
   rSetHas, rSetUnion, (-!-), unsafeRangedSet, rSetRanges,
   DiscreteOrdered(adjacent, adjacentBelow))
-import Data.Text (Text)
+import Data.Set (Set, fromList)
+import Data.UUID (UUID)
 import GHC.Generics (Generic)
 import qualified Data.Map as Map (empty, union, foldr)
 
@@ -107,14 +110,11 @@ empty = D Map.empty
 
 
 {- |
-  Find the peer that owns the specified partition.
+  Find the peers that own the specified partition.
 -}
-findPartition :: PartitionKey -> PartitionDistribution -> Maybe Peer
+findPartition :: PartitionKey -> PartitionDistribution -> Set Peer
 findPartition k (D d) =
-  let list = [(p, ks) | (p, kss) <- toList d, (_r, ks) <- toList kss] in
-  case dropWhile (not . member k . snd) list of
-    [] -> Nothing
-    (p, _):_ -> Just p
+  fromList [p | (p, kss) <- toList d, (_r, ks) <- toList kss, k `member` ks]
 
 
 {- |
@@ -136,20 +136,21 @@ update
   -> Map Replica KeySet
   -> PartitionDistribution
   -> PartitionDistribution
-update p r ks =
-  (D . unionWith Map.union (singleton p r) . unD)
-    (foldr (uncurry delete) ks (toList r))
+update p r =
+  D . unionWith Map.union (singleton p r) . unD . delete r
 
 
 {- |
   Remove all partitions identified by the key set from the distribution.
 -}
 delete
-  :: Replica
-  -> KeySet
+  :: Map Replica KeySet
   -> PartitionDistribution
   -> PartitionDistribution
-delete r ks = D . fmap (adjust (\\ ks) r) . unD
+delete ranges dist = 
+    foldr deleteEach dist (toList ranges)
+  where
+    deleteEach (r, ks) = D . fmap (adjust (\\ ks) r) . unD
 
 
 {- |
@@ -240,7 +241,7 @@ fromI = K . fromInteger
 {- |
   The way to identify a peer.
 -}
-type Peer = Text
+type Peer = UUID
 
 
 {- |
@@ -286,18 +287,6 @@ rebalanceAction peer (D dist) =
             else Nothing 
         _ -> Nothing
 
-  -- case sortBy (flip compare `on` ((size . snd) &&& fst)) (toList (unD dist)) of
-  --   (p, keyspace):remaining@(_:_) | p == peer -> 
-  --     let (target, targetSpace) = last remaining in
-  --     -- Add 100 to give some wiggle room for remainders, etc.
-  --     if size keyspace > (size targetSpace + 100)
-  --       then Just $
-  --         Move
-  --           target
-  --           (take ((size keyspace - size targetSpace) `div` 2) keyspace)
-  --       else Nothing
-  --   _ -> Nothing
-
 
 {- |
   The actions that are taken in order to build a balanced cluster.
@@ -336,5 +325,21 @@ take num set =
       Range (BoundaryAbove a) (BoundaryAbove (fromI (toI a + n)))
     takeRange n (Range (BoundaryBelow a) _) =
       Range (BoundaryBelow a) (BoundaryBelow (fromI (toI a + n)))
+
+
+{- |
+  This is the mutable state associated with a particular key. In a key/value
+  system, this would be the value.
+
+  The partition state is represented as an opaque byte string, and it
+  is up to the service implementation to make sure that the binary data
+  is encoded and decoded into whatever form the service needs.
+-}
+newtype PartitionState = PartitionState {
+    unstate :: ByteString
+  }
+  deriving (Show, Generic)
+
+instance Binary PartitionState
 
 

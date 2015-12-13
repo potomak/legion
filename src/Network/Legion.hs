@@ -8,7 +8,7 @@
   Riak, DynamoDB, and others.
 
   In other words, this framework is an abstraction over partitioning,
-  cluster-rebalancing,  node discovery, and request routing, allowing
+  cluster-rebalancing, node discovery, and request routing, allowing
   the user to focus on request logic and storage strategies.
 -}
 
@@ -29,9 +29,6 @@ module Network.Legion (
   -- * Framework Configuration
   -- $framework-config
   LegionarySettings(..),
-  DiscoverySettings(..),
-  MulticastDiscovery(..),
-  CustomDiscovery(..),
   -- * Utils
   newMemoryPersistence,
   diskPersistence
@@ -40,58 +37,52 @@ module Network.Legion (
 import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Control.Applicative ((<$>))
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.Chan (newChan, writeChan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
 import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TVar (newTVar, modifyTVar, readTVar, writeTVar)
-import Control.Exception (throw, try, SomeException, catch, evaluate)
-import Control.Monad (void, forever, join, (>=>))
+import Control.Concurrent.STM.TVar (newTVar, modifyTVar, readTVar)
+import Control.Exception (throw, try, SomeException, catch)
+import Control.Monad (void, forever, join)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Trans.Class (lift)
-import Data.Aeson (FromJSON)
 import Data.Binary (Binary, encode, decode)
 import Data.Bool (bool)
 import Data.ByteString (readFile, writeFile)
-import Data.ByteString.Lazy (ByteString, toStrict, fromStrict)
+import Data.ByteString.Lazy (toStrict, fromStrict)
 import Data.Conduit (Source, Sink, ($$), ($=), yield, await, awaitForever)
 import Data.Conduit.List (sourceList)
 import Data.Conduit.Network (sourceSocket)
 import Data.Conduit.Serialization.Binary (conduitDecode)
 import Data.HexString (hexString, fromBytes, toBytes)
-import Data.Map (Map, insert, delete, lookup, singleton, alter)
-import Data.Maybe (fromJust)
-import Data.Set (Set, fromList)
-import Data.UUID.V1 (nextUUID)
+import Data.Map (Map, insert, delete, lookup, singleton)
+import Data.Set (Set, fromList, toDescList, toList)
 import GHC.Generics (Generic)
-import Network.Legion.BSockAddr (BSockAddr(BSockAddr, getAddr))
+import Network.Legion.BSockAddr (BSockAddr(BSockAddr), getAddr)
+import Network.Legion.ClusterManagement (self, recover, newCluster,
+  Cluster, distribution, current, PeerMessage(PeerMessage, source,
+  messageId, payload), PeerMessagePayload(StoreState, StoreAck,
+  ForwardRequest, ForwardResponse, UpdateCluster), send, forward,
+  MessageId, ClusterState, requestJoin, peers, initManager, claim)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
-import Network.Legion.Distribution (peerOwns, KeySet, update, fromRange,
-  PartitionDistribution, findPartition, Peer, PartitionKey(K, unkey),
-  rebalanceAction, RebalanceAction(Move), Replica(R1))
-import Network.Legion.Journal (readJournal, initJournal,
-  Entry(UpdatingNextId, UpdatingPeer, UpdatingKeyspace))
-import Network.Legion.MessageId (MessageId)
-import Network.Multicast (multicastReceiver, multicastSender)
+import Network.Legion.Distribution (KeySet, findPartition, Peer,
+  PartitionKey(K, unkey), rebalanceAction, RebalanceAction(Move), Replica,
+  PartitionState(PartitionState, unstate))
+import Network.Legion.Fork (forkC)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
   defaultProtocol, listen, setSocketOption, socket, SockAddr(SockAddrInet,
-  SockAddrInet6, SockAddrUnix, SockAddrCan), close, connect, HostName,
-  PortNumber, Socket)
-import Network.Socket.ByteString (recvFrom, sendTo)
+  SockAddrInet6, SockAddrUnix, SockAddrCan), connect, getPeerName)
 import Network.Socket.ByteString.Lazy (sendAll)
 import System.Directory (removeFile, doesFileExist, getDirectoryContents)
-import System.Exit (ExitCode(ExitFailure))
-import System.IO (hPutStrLn, stderr)
-import System.Posix.Process (exitImmediately)
 import qualified Data.ByteString.Char8 as B (pack)
 import qualified Data.Conduit.List as CL (map, filter, consume)
 import qualified Data.HexString as Hex (toText)
-import qualified Data.Map as Map (keys, empty)
-import qualified Data.Set as Set (delete, null, member, singleton, insert)
+import qualified Data.Map as Map (keys, empty, member)
+import qualified Data.Set as Set (delete, null, member)
 import qualified Data.Text as T (unpack)
-import qualified Data.UUID as UUID (toText)
-import qualified Network.Legion.Distribution as KD (empty, delete, member)
+import qualified Network.Legion.Distribution as KD (member)
+import qualified Network.Legion.ClusterManagement as CM (merge)
 import qualified System.Log.Logger as L (debugM, warningM, errorM, infoM)
 
 -- $invocation
@@ -118,42 +109,21 @@ runLegionary :: (Binary response, Binary request)
   -> IO ()
 runLegionary
     legionary
-    settings@LegionarySettings {peerBindAddr, discovery}
+    settings@LegionarySettings {}
     startupMode
     requestSource
   = do
-    (nodeState@NodeState {self, updateJournal}, cmState)
-      <- makeNodeState settings startupMode
+    peerS <- startPeerListener settings
+    nodeState <- makeNodeState settings startupMode
     infoM ("The initial node state is: " ++ show nodeState)
-    cm <- initConnectionManager self cmState updateJournal
-    updateClaimState <- forkClaimProc cm nodeState
-    let discS = discoverySource discovery self peerBindAddr
-        peerS = peerMsgSource settings
-    (discS `merge` (peerS `merge` requestSource))
+    let joinS = joinMsgSource settings
+    (joinS `merge` (peerS `merge` requestSource))
       $= CL.map toMessage
-      $$ requestSink legionary nodeState cm updateClaimState
+      $$ requestSink legionary nodeState
   where
-    toMessage (Left m) = D m
+    toMessage (Left m) = J m
     toMessage (Right (Left m)) = P m
     toMessage (Right (Right m)) = R m
-
-
-{- |
-  Fork the process that periodically sends out claim messages from this node.
--}
-forkClaimProc
-  :: ConnectionManager
-  -> NodeState response
-  -> IO (NodeState response -> IO ())
-forkClaimProc cm initState = do
-    nodeStateT <- atomically (newTVar initState)
-    forkC "claim broadcast" . forever $ do
-      threadDelay fiveSeconds
-      NodeState {self, keyspace} <- atomically (readTVar nodeStateT)
-      broadcast cm (Claim (peerOwns self keyspace))
-    return (atomically . writeTVar nodeStateT)
-  where
-    fiveSeconds = 5000000 -- in microseconds
 
 
 {- |
@@ -162,82 +132,50 @@ forkClaimProc cm initState = do
 makeNodeState
   :: LegionarySettings
   -> StartupMode
-  -> IO (NodeState response, CMState)
-makeNodeState LegionarySettings {peerBindAddr, journal} NewCluster = do
+  -> IO (NodeState response)
+makeNodeState LegionarySettings {journal, peerBindAddr} NewCluster = do
   -- Build a brand new node state, for the first node in a cluster.
-  self <- UUID.toText . fromJust <$> nextUUID
-  let peers = singleton self (Nothing, peerBindAddr)
-      nextId = minBound
-      initialRange = singleton R1 (fromRange minBound maxBound)
-      keyspace = update self initialRange KD.empty
+  cluster <- newCluster journal peerBindAddr
+  cs <- current cluster
+  infoM ("This is a new cluster. The new cluster state is: " ++ show cs)
+  return NodeState {
+      cluster,
+      handoff = Nothing,
+      forwarded = Map.empty
+    }
 
-  updateJournal <- initJournal journal self (fmap snd peers) keyspace nextId
-
-  infoM ("My node id is: " ++ show self)
-  infoM "This is a new cluster."
-  return (
-      NodeState {
+makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
+    -- Join a cluster by either starting fresh, or recovering from a
+    -- shutdown or crash.
+    mj <- recover journal
+    infoM "Trying to join an existing cluster."
+    clusterState <- case mj of
+      Nothing -> joinCluster
+      Just lastCS ->
+        rejoinCluster lastCS
+    cluster <- initManager journal clusterState
+    return NodeState {
+        cluster,
         handoff = Nothing,
-        keyspace,
-        self,
-        forwarded = Map.empty,
-        knownPeers = Set.singleton self,
-        updateJournal
-      },
-      CMState {
-        cmPeers = peers,
-        nextId
+        forwarded = Map.empty
       }
-    )
-
-makeNodeState LegionarySettings {journal, peerBindAddr} JoinCluster = do
-  -- Join a cluster by either starting fresh, or recovering from a
-  -- shutdown or crash.
-  mj <- readJournal journal
-  infoM ("Journal was: " ++ show mj)
-  infoM "Trying to join an existing cluster."
-  case mj of
-    Nothing -> do
-      self <- UUID.toText . fromJust <$> nextUUID
-      infoM ("Starting a new node with node id: " ++ show self)
-      let peers = singleton self (Nothing, peerBindAddr)
-          keyspace = KD.empty
-          nextId = minBound
-      updateJournal <- initJournal journal self (fmap snd peers) keyspace nextId
-      return (
-          NodeState {
-            handoff = Nothing,
-            keyspace,
-            self,
-            forwarded = Map.empty,
-            knownPeers = Set.singleton self,
-            updateJournal
-          },
-          CMState {
-            cmPeers = peers,
-            nextId
-          }
-        )
-    Just (self, peers, keyspace, nextId) -> do
-      updateJournal <- initJournal journal self peers keyspace nextId
-      return (
-          NodeState {
-            handoff = Nothing,
-            keyspace = keyspace,
-            self,
-            forwarded = Map.empty,
-            knownPeers = Set.insert self (fromList (Map.keys peers)),
-            updateJournal
-          },
-          CMState {
-            cmPeers =
-              insert
-                self
-                (Nothing, peerBindAddr)
-                (fmap (\a -> (Nothing, a)) peers),
-            nextId
-          }
-        )
+  where
+    joinCluster = do
+      so <- socket (fam addr) Stream defaultProtocol
+      connect so addr
+      sendAll so (encode (JoinRequest (BSockAddr peerBindAddr)))
+      -- using sourceSocket and conduitDecode is easier than building
+      -- a recive/decode state loop, even though we only read a single
+      -- response.
+      sourceSocket so $= conduitDecode $$ do
+        response <- await
+        case response of
+          Nothing -> error 
+            $ "Couldn't join a cluster because there was no response "
+            ++ "to our join request!"
+          Just (JoinResponse clusterState) ->
+            return clusterState
+    rejoinCluster = error "rejoinCluster undefined"
 
 
 {- |
@@ -331,33 +269,11 @@ data Persistence = Persistence {
 type RequestMsg request response = ((PartitionKey, request), response -> IO ())
 
 
-{- |
-  This is the mutable state associated with a particular key. In a key/value
-  system, this would be the value.
-  
-  The partition state is represented as an opaque byte string, and it
-  is up to the service implementation to make sure that the binary data
-  is encoded and decoded into whatever form the service needs.
--}
-newtype PartitionState = PartitionState {
-    unstate :: ByteString
-  }
-  deriving (Show, Generic)
-
-instance Binary PartitionState
-
-
 -- $framework-config
 -- The legion framework has several operational parameters which can
 -- be controlled using configuration. These include the address binding
--- used to expose the cluster management service endpoint, and details
--- about the automatic node discovery strategy.
---
--- The node discovery strategy dictates how the legion framework goes
--- about finding other nodes on the network with which it can form a
--- cluster. UDP multicast works well if you are running your own hardware,
--- but it is not supported by most cloud environments like Amazon's EC2.
-
+-- used to expose the cluster management service endpoint and what file
+-- to use for cluster state journaling.
 
 {- |
   Settings used when starting up the legion framework.
@@ -366,38 +282,11 @@ data LegionarySettings = LegionarySettings {
     peerBindAddr :: SockAddr,
       -- ^ The address on which the legion framework will listen for
       --   rebalancing and cluster management commands.
-    discovery :: DiscoverySettings,
+    joinBindAddr :: SockAddr,
+      -- ^ The address on which the legion framework will listen for
+      --   cluster join requests.
     journal :: FilePath
   }
-
-
-{- |
-  Configuration of how to discover peers.
--}
-data DiscoverySettings
-  = Multicast MulticastDiscovery
-  | Custom CustomDiscovery
-
-
-{- |
-  Multicast Discovery supports a simple, built-in, discovery mechanism
-  based on UDP Multicast operations.
--}
-data MulticastDiscovery = MulticastDiscovery {
-    multicastHost :: HostName,
-    multicastPort :: PortNumber
-  } 
-
-
-{- |
-  Not implemented yet. This is a way to allow users to provide their
-  own discovery mechanisms. For instance, in EC2 (which disallows udp
-  traffic) some people use third party service discovery tools like
-  Consul or Eureka.  Integrating with all of these tools is beyond
-  the scope of this package, but some integrations may be provided by
-  supplemental packages such as @legion-consul@ or @legion-eureka@.
--}
-data CustomDiscovery = CustomDiscovery {}
 
 
 {- |
@@ -479,46 +368,71 @@ diskPersistence directory = Persistence {
 handlePeerMessage :: (Binary response, Binary request)
   => Legionary request response
   -> NodeState response
-  -> ConnectionManager
   -> PeerMessage
   -> IO (NodeState response)
 
 handlePeerMessage -- StoreState
     Legionary {persistence}
-    nodeState
-    cm
+    nodeState@NodeState {cluster}
     PeerMessage {source, messageId, payload = StoreState key state}
   = do
     saveState persistence key state
-    void $ send cm source (StoreAck messageId)
+    void $ send cluster source (StoreAck messageId)
     return nodeState
 
 handlePeerMessage -- ForwardRequest
     Legionary {handleRequest, persistence}
-    nodeState
-    cm
-    PeerMessage {
+    nodeState@NodeState {cluster, handoff}
+    msg@PeerMessage {
         payload = ForwardRequest key request,
         source,
         messageId
       }
-  = do
-    let respond = void . send cm source . ForwardResponse messageId . encode
-    
-    -- TODO 
-    --   - figure out some slick concurrency here, by maintaining
-    --       a map of keys that are currently being accessed or
-    --       something
-    --   - partitioning, balancing, etc.
-    -- 
-    either (respond . rethrow) respond =<< try (do 
-        state <- getState persistence key
-        let (response, newState) = handleRequest key (decode request) state
-        saveState persistence key newState
-        return response
-      )
+  | handingOff = do
+    owners <- toList . findPartition key <$> distribution cluster
+    case filter (/= self cluster) owners of
+      [] -> infoM 
+        -- TODO queue these messages up for later.
+        $ "Dropping message on the floor, because we are handing off "
+        ++ "the target key. Message was: " ++ show msg
+      peer:_ ->
+        forward cluster peer msg
+    return nodeState
+  | otherwise = do
+    owners <- findPartition key <$> distribution cluster
+    if self cluster `Set.member` owners
+      then do
+        let respond = void
+              . send cluster source
+              . ForwardResponse messageId
+              . encode
+        
+        -- TODO 
+        --   - figure out some slick concurrency here, by maintaining
+        --       a map of keys that are currently being accessed or
+        --       something
+        --   - partitioning, balancing, etc.
+        -- 
+        either (respond . rethrow) respond =<< try (do 
+            state <- getState persistence key
+            let (response, newState) = handleRequest key (decode request) state
+            saveState persistence key newState
+            return response
+          )
+      else case toList owners of
+        -- we don't own the key after all, someone was wrong to forward us this
+        -- request.
+        [] -> errorM
+          $ "Can't find any owners for the key: " ++ show key
+        peer:_ ->
+          forward cluster peer msg
     return nodeState
   where
+    handingOff :: Bool
+    handingOff = 
+      case handoff of
+        Just HandoffState {handoffRange} | key `KD.member` handoffRange -> True
+        _ -> False
     {- |
       rethrow is just a reification of `throw`.
     -}
@@ -528,7 +442,6 @@ handlePeerMessage -- ForwardRequest
 handlePeerMessage -- ForwardResponse
     Legionary {}
     nodeState@NodeState {forwarded}
-    _cm
     msg@PeerMessage {
         payload = ForwardResponse messageId response
       }
@@ -547,35 +460,17 @@ handlePeerMessage -- ForwardResponse
         forwarded = delete messageId forwarded
       }
 
-handlePeerMessage -- Claim
-    Legionary {}
-    nodeState@NodeState {keyspace, updateJournal, self}
-    _cm
-    PeerMessage {
-        payload = Claim claims,
-        source
-      }
-  = do
-    -- don't allow someone else to overwrite our ownership.
-    let ours = peerOwns self keyspace
-    let newKeyspace = update self ours (update source claims keyspace)
-    updateJournal (UpdatingKeyspace newKeyspace)
-    return nodeState {
-        keyspace = newKeyspace
-      }
-
 handlePeerMessage -- StoreAck
     Legionary {persistence = Persistence {listKeys, saveState}}
     nodeState@NodeState {
+        cluster,
         handoff = Just handoff@HandoffState {
             expectedAcks,
             targetPeer,
             handoffReplica,
             handoffRange
-          },
-        keyspace
+          }
       }
-    cm
     PeerMessage {
         payload = StoreAck messageId
       }
@@ -583,13 +478,11 @@ handlePeerMessage -- StoreAck
     let newAcks = Set.delete messageId expectedAcks
     if Set.null newAcks
       then do
-        (void . send cm targetPeer . Handoff handoffReplica) handoffRange
+        claim cluster targetPeer (singleton handoffReplica handoffRange)
         listKeys $= CL.filter (`KD.member` handoffRange)
           $$ awaitForever (lift . (`saveState` Nothing))
         return nodeState {
-            handoff = Nothing,
-            keyspace =
-              update targetPeer (singleton handoffReplica handoffRange) keyspace
+            handoff = Nothing
           }
       else
         return nodeState {
@@ -603,7 +496,6 @@ handlePeerMessage -- StoreAck
     nodeState@NodeState {
         handoff = Nothing
       }
-    _cm
     msg@PeerMessage {
         payload = StoreAck _
       }
@@ -615,36 +507,33 @@ handlePeerMessage -- StoreAck
       ++ "wrong at the network level. The message was: " ++ show msg
     return nodeState
 
-handlePeerMessage -- Handoff
+handlePeerMessage -- UpdateCluster
     Legionary {}
-    nodeState@NodeState {keyspace, self}
-    cm
+    nodeState@NodeState {
+        cluster
+      }
     PeerMessage {
-        payload = Handoff replica keys
+        payload = UpdateCluster cs
       }
   = do
-    -- TODO this broadcast would be handled by the normal claim process in due
-    -- time. Maybe we should think about letting that process handle this.
-    broadcast cm (Claim (singleton replica keys))
-    return nodeState {
-        keyspace = update self (singleton replica keys) keyspace
-      }
+    CM.merge cluster cs
+    return nodeState
     
+
 
 {- |
   Defines the local state of a node in the cluster.
 -}
 data NodeState response = NodeState {
-    keyspace :: PartitionDistribution,
+    cluster :: Cluster,
     handoff :: Maybe HandoffState,
-    self :: Peer,
-    forwarded :: Map MessageId (response -> IO ()),
-    knownPeers :: Set Peer,
-    updateJournal :: Entry -> IO ()
+    forwarded :: Map MessageId (response -> IO ())
   }
 
 instance Show (NodeState response) where
-  show (NodeState a b c _ d _) = "(NodeState " ++ show (a, b, c, d) ++ ")"
+  show NodeState {handoff} =
+    "(NodeState {cluster = _, handoff = " ++ show handoff
+    ++ ", forwarded = _})"
 
 {- |
   Defines the state of a handoff.
@@ -658,74 +547,89 @@ data HandoffState = HandoffState {
 
 
 {- |
-  The type of messages sent to us from other peers.
+  This is the type of a join request message.
 -}
-data PeerMessage = PeerMessage {
-    source :: Peer,
-    messageId :: MessageId,
-    payload :: PeerMessagePayload
-  }
-  deriving (Generic, Show)
-
-instance Binary PeerMessage
+data JoinRequest = JoinRequest BSockAddr deriving (Generic, Show)
+instance Binary JoinRequest
 
 
 {- |
-  The data contained within a peer message.
-
-  TODO: Think about distinguishing the broadcast messages `NewPeer` and
-  `Claim`. Those messages are particularly important because they
-  are the only ones for which it is necessary that every node eventually
-  receive a copy of the message.
-
-  When we get around to implementing durability and data replication,
-  the sustained inability to confirm that a node has received one of
-  these messages should result in the ejection of that node from the
-  cluster and the blacklisting of that node so that it can never re-join.
+  The response to a JoinRequst message
 -}
-data PeerMessagePayload
-  = StoreState PartitionKey (Maybe PartitionState)
-    -- ^ Tell the receiving node to store the key/state information in
-    --   its persistence layer in preparation for a key range ownership
-    --   handoff. The receiving node should NOT take ownership of this
-    --   key, or start fielding user requests for this key.
-  | StoreAck MessageId
-    -- ^ Acknowledge the successful handling of a `StoreState` message.
-  | Handoff Replica KeySet
-    -- ^ Tell the receiving node that we would like it to take over the
-    --   identified key range, which should have already been transmitted
-    --   using a series of `StoreState` messages.
-  | Claim (Map Replica KeySet)
-    -- ^ Announce that the sending node claims the set of keys as its own,
-    --   either in response to a `Handoff` message, or else as a general
-    --   periodic notification to keep the cluster up to date.
-  | ForwardRequest PartitionKey ByteString
-    -- ^ Forward a binary encoded user request to the receiving node.
-  | ForwardResponse MessageId ByteString
-    -- ^ Respond to the forwarded request, identified by MessageId,
-    --   with the binary encoded user response.
-  deriving (Generic, Show)
-
-instance Binary PeerMessagePayload
+data JoinResponse = JoinResponse ClusterState deriving (Generic)
+instance Binary JoinResponse
 
 
 {- |
-  This is the type of message sent to us by the node discovery mechanism.
+  A source of cluster join request messages.
 -}
-data DiscoveryMessage
-  = NewPeer Peer BSockAddr
-    -- ^ Tell the receiving node that a new peer has shown up in the
-    --   cluster.
-  deriving (Show, Generic)
+joinMsgSource
+  :: LegionarySettings
+  -> Source IO (JoinRequest, JoinResponse -> IO ())
+joinMsgSource LegionarySettings {joinBindAddr} = join . lift $
+    catch (do
+        chan <- newChan
+        so <- socket (fam joinBindAddr) Stream defaultProtocol
+        setSocketOption so ReuseAddr 1
+        bindSocket so joinBindAddr
+        listen so 5
+        forkC "join socket acceptor" $ acceptLoop so chan
+        return (chanToSource chan)
+      ) (\err -> do
+        errorM
+          $ "Couldn't start join request service, because of: "
+          ++ show (err :: SomeException)
+        throw err
+      )
+  where
+    acceptLoop so chan =
+        catch (
+          forever $ do
+            (conn, _) <- accept so
+            (void . forkIO . logErrors) (
+                sourceSocket conn
+                $= conduitDecode
+                $= logJoinMessage
+                $= attachResponder conn
+                $$ chanToSink chan
+              )
+        ) (\err -> do
+          errorM
+            $ "error in join request accept loop: "
+            ++ show (err :: SomeException)
+          throw err
+        )
+      where
+        logJoinMessage = awaitForever $ \msg -> do
+          debugM ("Got JoinRequest: " ++ show msg)
+          yield msg
+          
+        logErrors :: IO () -> IO ()
+        logErrors io = do
+          result <- try io
+          case result of
+            Left err ->
+              warningM
+                $ "Incomming join connection crashed because of: "
+                ++ show (err :: SomeException)
+            Right v -> return v
 
-instance Binary DiscoveryMessage
+        attachResponder conn = awaitForever (\msg -> do
+            mvar <- liftIO newEmptyMVar
+            yield (msg, putMVar mvar)
+            response <- liftIO $ takeMVar mvar
+            liftIO $ sendAll conn (encode response)
+          )
 
 
 {- |
   Construct a source of incoming peer messages.
+  We have to start the peer listener first before we spin up the cluster
+  management, which is why this is an @IO (Source IO PeerMessage)@ instead of a
+  @Source IO PeerMessage@.
 -}
-peerMsgSource :: LegionarySettings -> Source IO PeerMessage
-peerMsgSource LegionarySettings {peerBindAddr} = join . lift $
+startPeerListener :: LegionarySettings -> IO (Source IO PeerMessage)
+startPeerListener LegionarySettings {peerBindAddr} =
     catch (do
         inputChan <- newChan
         so <- socket (fam peerBindAddr) Stream defaultProtocol
@@ -738,74 +642,34 @@ peerMsgSource LegionarySettings {peerBindAddr} = join . lift $
         errorM
           $ "Couldn't start incomming peer message service, because of: "
           ++ show (err :: SomeException)
-        -- the following is a cute trick to forward exceptions downstream
-        -- using a thunk.
-        (return . yield . throw) err
+        throw err
       )
   where
     acceptLoop so inputChan =
         catch (
           forever $ do
             (conn, _) <- accept so
-            (void . forkIO . logErrors)
+            remoteAddr <- getPeerName conn
+            (void . forkIO . logErrors remoteAddr)
               (sourceSocket conn $= conduitDecode $$ msgSink)
         ) (\err -> do
-          errorM $ "error in accept loop: " ++ show (err :: SomeException)
-          yield (throw err) $$ msgSink
+          errorM
+            $ "error in peer message accept loop: "
+            ++ show (err :: SomeException)
+          throw err
         )
       where
         msgSink = chanToSink inputChan
-        logErrors io = do
+
+        logErrors :: SockAddr -> IO () -> IO ()
+        logErrors remoteAddr io = do
           result <- try io
           case result of
             Left err ->
               warningM
-                $ "Incomming peer connection crashed because of: "
-                ++ show (err :: SomeException)
+                $ "Incomming peer connection (" ++ show remoteAddr
+                ++ ") crashed because of: " ++ show (err :: SomeException)
             Right v -> return v
-
-
-{- |
-  Initialize the node discovery process.
--}
-discoverySource
-  :: DiscoverySettings
-  -> Peer
-  -> SockAddr
-  -> Source IO DiscoveryMessage
-discoverySource (
-      Multicast MulticastDiscovery {multicastHost, multicastPort}
-    )
-    self
-    selfAddy
-  = do
-    -- "rso" means "receiver socket"
-    rso <- lift $ multicastReceiver multicastHost multicastPort
-    lift . forkC "discovery broadcast" $ do
-      -- "sso" means "sender socket"
-      (sso, addr) <- multicastSender multicastHost multicastPort
-      let newPeerMsg =
-            toStrict (encode (self, NewPeer self (BSockAddr selfAddy)))
-      forever $ do
-        threadDelay 10000000
-        sendTo sso newPeerMsg addr
-        
-    forever $ do
-      result <- (lift . try . getMessage) rso
-      case result of
-        Left err -> warningM 
-          $ "Bad message on UDP awareness socket, causing "
-          ++ "exception: " ++ show (err :: SomeException)
-        -- ignore messages from ourself.
-        Right (peer, _) | peer == self -> return ()
-        Right (_, msg) -> yield msg
-  where
-    getMessage :: Socket -> IO (Peer, DiscoveryMessage)
-    getMessage so = do
-      bytes <- (fromStrict . fst) <$> recvFrom so 50000
-      evaluate (decode bytes)
-
-discoverySource (Custom _) _ _ = error "custom discovery not implemented"
 
 
 {- |
@@ -828,13 +692,6 @@ warningM = liftIO . L.warningM "legion"
 {- |
   Shorthand logging.
 -}
-errorM :: (MonadIO io) => String -> io ()
-errorM = liftIO . L.errorM "legion"
-
-
-{- |
-  Shorthand logging.
--}
 debugM :: (MonadIO io) => String -> io ()
 debugM = liftIO . L.debugM "legion"
 
@@ -852,66 +709,63 @@ infoM = L.infoM "legion"
 requestSink :: (Binary response, Binary request)
   => Legionary request response
   -> NodeState response
-  -> ConnectionManager
-  -> (NodeState response -> IO ())
   -> Sink (Message request response) IO ()
-requestSink l nodeState cm updateClaims = do
-  debugM ("Node State: " ++ show nodeState)
-  nodeState2@NodeState {forwarded, knownPeers}
-    <- lift $ rebalance l cm nodeState
-  lift $ updateClaims nodeState2
-  msg <- await
-  debugM ("Receiving: " ++ show msg)
-  case msg of
-    Just (P PeerMessage {source}) | not (source `Set.member` knownPeers) -> do
-      warningM "Dropping message from unknown peer."
-      requestSink l nodeState2 cm updateClaims
-    Just (P peerMsg) -> do
-      newNodeState
-        <- lift $ handlePeerMessage l nodeState2 cm peerMsg
-      requestSink l newNodeState cm updateClaims
-    Just (R ((key, request), respond)) ->
-      case findPartition key (keyspace nodeState2) of
-        Nothing -> do
-          errorM
-            $ "Keyspace does not contain key: " ++ show key ++ ". This "
-            ++ "is a very bad thing and probably means there is a bug, "
-            ++ "or else this node has not joined a cluster yet."
-          requestSink l nodeState2 cm updateClaims
-        Just peer -> do
-          mid <- lift $ send cm peer (ForwardRequest key (encode request))
-          requestSink
-            l
-            nodeState2 {forwarded = insert mid respond forwarded}
-            cm
-            updateClaims
-    Just (D discMsg) -> do
-      newNodeState <- lift $ handleDiscoveryMessage nodeState2 cm discMsg
-      requestSink l newNodeState cm updateClaims
-    Nothing ->
-      return ()
+requestSink l nodeState = do
+    logNodeState nodeState
+    nodeState2@NodeState {forwarded, cluster}
+      <- lift $ rebalance l nodeState
+    msg <- await
+    debugM ("Receiving: " ++ show msg)
+    case msg of
+      Just (P peerMsg@PeerMessage {source}) ->
+        known cluster source >>= bool
+          (do
+            warningM ("Dropping message from unknown peer: " ++ show source)
+            requestSink l nodeState2
+          ) (do
+            newNodeState <- lift $ handlePeerMessage l nodeState2 peerMsg
+            requestSink l newNodeState
+          )
+      Just (R ((key, request), respond)) -> do
+        dist <- liftIO $ distribution cluster
+        debugM ("Routing against: " ++ show dist)
+        case toDescList (findPartition key dist) of
+          [] -> do
+            errorM
+              $ "Keyspace does not contain key: " ++ show key ++ ". This "
+              ++ "is a very bad thing and probably means there is a bug, "
+              ++ "or else this node has not joined a cluster yet."
+            requestSink l nodeState2
+          peer:_ -> do
+            mid <- lift $
+              send cluster peer (ForwardRequest key (encode request))
+            requestSink l nodeState2 {forwarded = insert mid respond forwarded}
+      Just (J m) ->
+        lift (handleJoinRequest nodeState2 m) >>= requestSink l
+        
+      Nothing ->
+        return ()
+  where
+    {- |
+      Return `True` if the peer is a known peer, false otherwise.
+    -}
+    known cluster peer = liftIO $ (peer `Map.member`) <$> peers cluster
 
 
 {- |
-  Handle discovery messages
+  Handle a join request message
 -}
-handleDiscoveryMessage
+handleJoinRequest
   :: NodeState response
-  -> ConnectionManager
-  -> DiscoveryMessage
+  -> (JoinRequest, JoinResponse -> IO ())
   -> IO (NodeState response)
-handleDiscoveryMessage
-    nodeState@NodeState {knownPeers, updateJournal}
-    cm
-    msg@(NewPeer peer addy)
+handleJoinRequest
+    ns@NodeState {cluster}
+    (JoinRequest peerAddr, respond)
   = do
-    debugM ("Received NewPeer: " ++ show msg)
-    -- add the peer to the list
-    updateJournal (UpdatingPeer peer addy)
-    updatePeer cm peer addy
-    return nodeState {
-        knownPeers = Set.insert peer knownPeers
-      }
+    peerCS <- requestJoin cluster (getAddr peerAddr)
+    respond (JoinResponse peerCS)
+    return ns
 
 
 {- |
@@ -920,13 +774,13 @@ handleDiscoveryMessage
 -}
 rebalance
   :: Legionary request response
-  -> ConnectionManager
   -> NodeState response
   -> IO (NodeState response)
 -- don't start a handoff if there is one already in progress.
-rebalance _ _ ns@NodeState {handoff = Just _} = return ns
-rebalance l cm ns@NodeState {self, keyspace} = do
-    let action = rebalanceAction self keyspace
+rebalance _ ns@NodeState {handoff = Just _} = return ns
+rebalance l ns@NodeState {cluster} = do
+    dist <- distribution cluster
+    let action = rebalanceAction (self cluster) dist
     debugM ("The rebalancing action is: " ++ show action)
     case action of
       Nothing -> return ns
@@ -938,187 +792,21 @@ rebalance l cm ns@NodeState {self, keyspace} = do
           [] -> do
             -- There weren't actually any keys to migrate, so short
             -- circuit the handoff.
-            (void . send cm targetPeer . Handoff replica) keys
-            return ns {
-                keyspace = update targetPeer (singleton replica keys) keyspace
-              }
-          _ -> 
+            claim cluster targetPeer (singleton replica keys)
+            return ns
+          _ ->
             return ns {
                 handoff = Just HandoffState {
                     expectedAcks = fromList messageIds,
                     handoffReplica = replica,
                     handoffRange = keys,
                     targetPeer
-                  },
-                keyspace = KD.delete replica keys keyspace
+                  }
               }
   where
     sendState persist peer key = do
       state <- getState persist key
-      send cm peer (StoreState key state)
-
-
-{- |
-  Initialize the connection manager based on the node state.
--}
-initConnectionManager
-  :: Peer
-  -> CMState
-  -> (Entry -> IO ())
-  -> IO ConnectionManager
-initConnectionManager self initState updateJournal = do
-    cmChan <- newChan
-    (forkC "connection manager" . void) (runManager cmChan initState)
-    return ConnectionManager {cmChan}
-  where
-    {- |
-      Try to send the payload over the socket, and if that fails, then try to
-      create a new socket and retry sending the payload. Return whatever the
-      "working" socket is.
-    -}
-    sendWithRetry :: Maybe Socket -> SockAddr -> ByteString -> IO Socket
-    sendWithRetry Nothing addy payload = do
-      so <- socket (fam addy) Stream defaultProtocol
-      connect so addy
-      sendWithRetry (Just so) addy payload
-
-    sendWithRetry (Just so) addy payload = do
-      result <- try (sendAll so payload)
-      case result of
-        Left err -> do
-          infoM
-            $ "Socket to " ++ show addy ++ " died. Retrying on a new "
-            ++ "socket. The error was: " ++ show (err :: SomeException)
-          void (try (close so) :: IO (Either SomeException ()))
-          so2 <- socket (fam addy) Stream defaultProtocol
-          connect so2 addy
-          sendAll so2 payload
-          return so2
-        Right _ ->
-          return so
-
-      
-    {- |
-      This is the function that implements the actual connection manager.
-    -}
-    runManager :: Chan CMMessage -> CMState -> IO CMState
-    runManager chan = (foldr1 (>=>) . repeat) (
-        \s@CMState {cmPeers, nextId} -> do
-          msg <- readChan chan
-          case msg of
-            Send peer payload respond -> do
-              -- respond with the message id as soon as we know it,
-              -- which is immediately
-              updateJournal (UpdatingNextId (succ nextId))
-              respond nextId
-              newState <- case lookup peer cmPeers of
-                Nothing -> do
-                  logNoPeer peer payload cmPeers
-                  return s
-                -- "mso" means Maybe Socket
-                Just (mso, addy) -> catch (do
-                    let peerMsg = PeerMessage {
-                            source = self,
-                            messageId = nextId,
-                            payload
-                          }
-                    debugM ("Sending: " ++ show peerMsg)
-                    so <- sendWithRetry mso addy (encode peerMsg)
-                    return s {
-                        cmPeers = insert peer (Just so, addy) cmPeers
-                      }
-                  ) (\e -> do
-                    errorM
-                      $ "Some kind of error happend while trying to send a "
-                      ++ "message to a peer: " ++ show peer
-                      ++ ". The message was: " ++ show payload
-                      ++ ". The error was: " ++ show (e :: SomeException)
-                      ++ ". The peer table was: " ++ show cmPeers
-                    return s {
-                        cmPeers = insert peer (Nothing, addy) cmPeers
-                      }
-                  )
-              return newState {nextId = succ nextId}
-            UpdatePeer peer addy ->
-              -- TODO: `updatePeerEntry` does the right thing in the
-              -- case where the peer address didn't change, but in the
-              -- case where it did exist and was changed, I'm only hoping
-              -- that garbage collected sockets get closed. I'm not too
-              -- worried because a peer changing addresses is unlikely
-              -- to say the least, and impossible to say the most.
-              return s {
-                cmPeers = alter (updatePeerEntry (getAddr addy)) peer cmPeers
-              }
-            Broadcast payload -> do
-              let mkSend peer = Send peer payload (const (return ()))
-              mapM_ (writeChan chan . mkSend) (Map.keys cmPeers)
-              return s
-      )
-
-    updatePeerEntry addy val@(Just (_, addy2)) | addy == addy2 = val
-    updatePeerEntry addy _ = Just (Nothing, addy)
-
-    logNoPeer peer msg peers_ = errorM
-      $ "Trying to send a message to the unknown peer " ++ show peer
-      ++ ". Not sure how this can happen. Our internal peer table must "
-      ++ "have gotten corrupted somehow. This is a bug. We are dropping "
-      ++ "the message on the floor and continuing as if nothing happened. "
-      ++ "The message payload was: " ++ show msg ++ ". The peer table is: "
-      ++ show peers_
-
-
-{- |
-  A value of this type provides a handle to a connection manager
-  instances.
--}
-data ConnectionManager =
-  ConnectionManager {
-    cmChan :: Chan CMMessage
-  }
-
-
-{- |
-  This is the internal state of the connection manager.
--}
-data CMState =
-  CMState {
-    cmPeers :: Map Peer (Maybe Socket, SockAddr),
-    nextId :: MessageId
-  }
-
-
-{- |
-  This is the type of message understood by the connection manager.
--}
-data CMMessage
-  = Send Peer PeerMessagePayload (MessageId -> IO ())
-  | UpdatePeer Peer BSockAddr
-  | Broadcast PeerMessagePayload
-
-
-{- |
-  Sends a peer message using the connection manager. Returns the messageId
-  of the sent message.
--}
-send :: ConnectionManager -> Peer -> PeerMessagePayload -> IO MessageId
-send cm peer payload = do
-  mvar <- newEmptyMVar
-  writeChan (cmChan cm) (Send peer payload (putMVar mvar))
-  takeMVar mvar
-
-
-{- |
-  Update the connection manager with some new peer information.
--}
-updatePeer :: ConnectionManager -> Peer -> BSockAddr -> IO ()
-updatePeer cm peer addy = writeChan (cmChan cm) (UpdatePeer peer addy)
-
-
-{- |
-  Broadcast a message to all peers.
--}
-broadcast :: ConnectionManager -> PeerMessagePayload -> IO ()
-broadcast cm payload = writeChan (cmChan cm) (Broadcast payload)
+      send cluster peer (StoreState key state)
 
 
 {- |
@@ -1132,12 +820,11 @@ data StartupMode
     --   implementing some safeguards to make sure only one node in
     --   a cluster was started using this startup mode, but for now,
     --   we are counting on you, the user, to do the right thing.
-  | JoinCluster
+  | JoinCluster SockAddr
     -- ^ Indicates that the node should try to join an existing cluster,
     --   either by starting fresh, or by recovering from a shutdown
     --   or crash.
-  deriving (Generic)
-instance FromJSON StartupMode
+  deriving (Show, Eq)
 
 
 {- |
@@ -1146,43 +833,30 @@ instance FromJSON StartupMode
 data Message request response
   = P PeerMessage
   | R (RequestMsg request response)
-  | D DiscoveryMessage
-
+  | J (JoinRequest, JoinResponse -> IO ())
 
 instance Show (Message request response) where
   show (P m) = "(P " ++ show m ++ ")"
   show (R ((p, _), _)) = "(R ((" ++ show p ++ ", _), _))"
-  show (D m) = "(D " ++ show m ++ ")"
+  show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
 
 
 {- |
-  Forks a critical thread. "Critical" in this case means that if the thread
-  crashes for whatever reason, then the program cannot continue correctly, so
-  we should crash the program instead of running in some kind of zombie broken
-  state.
+  Shorthand logging.
 -}
-forkC
-  :: String
-    -- ^ The name of the critical thread, used for logging.
-  -> IO ()
-    -- ^ The IO to execute.
-  -> IO ()
-forkC name io =
-  void . forkIO $ do
-    result <- try io
-    case result of
-      Left err -> do
-        let msg =
-              "Exception caught in critical thread " ++ show name
-              ++ ". We are crashing the entire program because we can't "
-              ++ "continue without this thread. The error was: "
-              ++ show (err :: SomeException)
-        -- write the message to every place we can think of.
-        errorM msg
-        putStrLn msg
-        hPutStrLn stderr msg
-        exitImmediately (ExitFailure 1)
-      Right v -> return v
+errorM :: (MonadIO io) => String -> io ()
+errorM = liftIO . L.errorM "legion"
 
--- tv str a = trace (str ++ ": " ++ show a) a
+
+{- |
+  A helper function to log the state of the node:
+-}
+logNodeState :: (MonadIO io) => NodeState response -> io ()
+logNodeState ns@NodeState {cluster} = liftIO $ do
+  debugM $ "The current node state is: " ++ show ns
+  cs <- current cluster
+  dist <- distribution cluster
+  debugM $ "The current cluster state is: " ++ show cs
+  debugM $ "The current distribution state is: " ++ show dist
+
 
