@@ -89,6 +89,28 @@ import qualified System.Log.Logger as L (debugM, warningM, errorM, infoM)
 -- Notes on invocation.
 
 {- |
+  Forks the legion framework in a background thread, and returns a way to
+  send user requests to it and retrieve the responses to those requests.
+-}
+forkLegionary :: (Binary response, Binary request)
+  => Legionary request response
+    -- ^ The user-defined legion application to run.
+  -> LegionarySettings
+    -- ^ Settings and configuration of the legionary framework.
+  -> StartupMode
+  -> IO (PartitionKey -> request -> IO response)
+forkLegionary legionary settings startupMode = do
+  chan <- newChan
+  forkC "main legion thread" $
+    runLegionary legionary settings startupMode (chanToSource chan)
+  return (\ key request -> do
+      responseVar <- newEmptyMVar
+      writeChan chan ((key, request), putMVar responseVar)
+      takeMVar responseVar
+    )
+
+
+{- |
   Run the legion node framework program, with the given user definitions,
   framework settings, and request source. This function never returns
   (except maybe with an exception if something goes horribly wrong).
@@ -176,28 +198,6 @@ makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
           Just (JoinResponse clusterState) ->
             return clusterState
     rejoinCluster = error "rejoinCluster undefined"
-
-
-{- |
-  Forks the legion framework in a background thread, and returns a way to
-  send user requests to it and retrieve the responses to those requests.
--}
-forkLegionary :: (Binary response, Binary request)
-  => Legionary request response
-    -- ^ The user-defined legion application to run.
-  -> LegionarySettings
-    -- ^ Settings and configuration of the legionary framework.
-  -> StartupMode
-  -> IO (PartitionKey -> request -> IO response)
-forkLegionary legionary settings startupMode = do
-  chan <- newChan
-  forkC "main legion thread" $
-    runLegionary legionary settings startupMode (chanToSource chan)
-  return (\ key request -> do
-      responseVar <- newEmptyMVar
-      writeChan chan ((key, request), putMVar responseVar)
-      takeMVar responseVar
-    )
 
 
 -- $service-implementaiton
