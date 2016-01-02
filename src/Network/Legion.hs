@@ -360,7 +360,7 @@ diskPersistence directory = Persistence {
     -}
     toHex :: PartitionKey -> String
     toHex = T.unpack . Hex.toText . fromBytes . toStrict . encode
-    
+
     fromHex :: String -> PartitionKey
     fromHex = decode . fromStrict . toBytes . hexString . B.pack
 
@@ -650,8 +650,11 @@ startPeerListener LegionarySettings {peerBindAddr} =
           forever $ do
             (conn, _) <- accept so
             remoteAddr <- getPeerName conn
-            (void . forkIO . logErrors remoteAddr)
-              (sourceSocket conn $= conduitDecode $$ msgSink)
+            (void . forkIO . logErrors remoteAddr) (
+                sourceSocket conn
+                $= conduitDecode
+                $$ msgSink
+              )
         ) (\err -> do
           errorM
             $ "error in peer message accept loop: "
