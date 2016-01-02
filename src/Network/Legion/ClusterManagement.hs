@@ -39,7 +39,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Binary (Binary(get), encode)
 import Data.Binary.Get (runGetOrFail, Get)
 import Data.Bool (bool)
-import Data.ByteString.Lazy (ByteString, null, readFile, hPut)
+import Data.ByteString.Lazy (ByteString, null, hPut, hGetContents)
 import Data.Conduit (($$), awaitForever)
 import Data.Map (Map, lookup, toAscList, toDescList, differenceWith,
   unionWith, keys)
@@ -59,7 +59,7 @@ import Network.Socket (SockAddr, Socket, socket, SocketType(Stream),
   SockAddrUnix, SockAddrCan), Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN))
 import Network.Socket.ByteString.Lazy (sendAll)
 import System.Directory (doesFileExist)
-import System.IO (withBinaryFile, IOMode(WriteMode),
+import System.IO (withBinaryFile, IOMode(WriteMode, ReadMode),
   BufferMode(NoBuffering), hSetBuffering)
 import qualified Data.Map as Map (empty, singleton, fromList, insert,
   toList)
@@ -190,21 +190,22 @@ recover
   :: FilePath
   -> IO (Maybe ClusterState)
 recover journalFile =
-    doesFileExist journalFile >>= bool (return Nothing) (do
-        fileData <- readFile journalFile
-        case runGetOrFail getInit fileData of
-          Left (_, _, err) -> error
-            $ "Malformed or corrupt journal file: " ++ show journalFile
-            ++ ". We can't go on like this. The best thing to do "
-            ++ "is to deep six this node entirely, maybe add a virgin "
-            ++ "node to the cluster, and let the cluster heal itself. "
-            ++ "Unless you know EXACTLY what you are doing, just deleting "
-            ++ "the journal file and restarting is probably going to be "
-            ++ "something you will regret. The specific error was: " ++ err
-          Right (remaining, _, val) -> do
-            let (cs, warning) = readAndApply val remaining
-            maybe (return ()) warningM warning
-            return (Just cs)
+    doesFileExist journalFile >>= bool (return Nothing) (
+        withBinaryFile journalFile ReadMode $ \h -> do
+          fileData <- hGetContents h
+          case runGetOrFail getInit fileData of
+            Left (_, _, err) -> error
+              $ "Malformed or corrupt journal file: " ++ show journalFile
+              ++ ". We can't go on like this. The best thing to do "
+              ++ "is to deep six this node entirely, maybe add a virgin "
+              ++ "node to the cluster, and let the cluster heal itself. "
+              ++ "Unless you know EXACTLY what you are doing, just deleting "
+              ++ "the journal file and restarting is probably going to be "
+              ++ "something you will regret. The specific error was: " ++ err
+            Right (remaining, _, val) -> do
+              let (cs, warning) = readAndApply val remaining
+              maybe (return ()) warningM warning
+              return (Just cs)
       )
   where
     getInit :: Get ClusterState
@@ -263,8 +264,8 @@ initJournal file cs = do
   initialWriteComplete <- newEmptyMVar
   void . forkC "journaling thread" $ 
     withBinaryFile file WriteMode (\h -> do
-        hPut h (encode cs)
         hSetBuffering h NoBuffering
+        hPut h (encode cs)
         putMVar initialWriteComplete ()
         chanToSource chan $$ awaitForever (\(entry, finished) -> liftIO $ do
             hPut h (encode entry)
