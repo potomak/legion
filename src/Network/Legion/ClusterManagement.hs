@@ -410,10 +410,10 @@ connection :: SockAddr -> IO (Chan PeerMessage)
 connection addr = do
     chan <- newChan
     forkC ("connection to: " ++ show addr) $
-      handle chan =<< openSocket
+      handle chan Nothing
     return chan
   where
-    handle :: Chan PeerMessage -> Socket -> IO ()
+    handle :: Chan PeerMessage -> Maybe Socket -> IO ()
     handle chan so =
       readChan chan >>= sendWithRetry so . encode >>= handle chan
 
@@ -431,8 +431,28 @@ connection addr = do
       create a new socket and retry sending the payload. Return whatever the
       "working" socket is.
     -}
-    sendWithRetry :: Socket -> ByteString -> IO Socket
-    sendWithRetry so payload = do
+    sendWithRetry :: Maybe Socket -> ByteString -> IO (Maybe Socket)
+    sendWithRetry Nothing payload = do
+      result <- try openSocket
+      case result of
+        Left err -> do
+          warningM
+            $ "Can't connect to: " ++ show addr ++ ". Dropping message on "
+            ++ "the floor: " ++ show payload ++ ". The error was: "
+            ++ show (err :: SomeException)
+          return Nothing
+        Right so -> do
+          result2 <- try (sendAll so payload)
+          case result2 of
+            Left err -> warningM
+              $ "An error happend when trying to send a payload over a socket "
+              ++ "to the address: " ++ show addr ++ ". The error was: "
+              ++ show (err :: SomeException) ++ ". This is the last straw, we "
+              ++ "are not retrying. The message is being dropped on the floor. "
+              ++ "The message was: " ++ show payload
+            Right _ -> return ()
+          return (Just so)
+    sendWithRetry (Just so) payload = do
       result <- try (sendAll so payload)
       case result of
         Left err -> do
@@ -440,11 +460,9 @@ connection addr = do
             $ "Socket to " ++ show addr ++ " died. Retrying on a new "
             ++ "socket. The error was: " ++ show (err :: SomeException)
           void (try (close so) :: IO (Either SomeException ()))
-          so2 <- openSocket
-          sendAll so2 payload
-          return so2
+          sendWithRetry Nothing payload
         Right _ ->
-          return so
+          return (Just so)
 
 
 {- |
