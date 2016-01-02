@@ -3,18 +3,23 @@
 
 name:                legion
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            Distributed, stateful, homogeneous microservice framework.
+description:         Legion is a framework for writing distributed,
+                     homogeneous, stateful microservices in Haskell.
 homepage:            https://github.com/taphu/legion
 license:             Apache-2.0
 license-file:        LICENSE
 author:              Rick Owens
 maintainer:          rick@owenssoftware.com
-copyright:           2015 Rick Owens
+copyright:           2015-2016 Rick Owens
 category:            Concurrency, Network
 build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
+
+source-repository head
+  type: git
+  location: git@github.com:taphu/legion.git
 
 library
   exposed-modules:     
