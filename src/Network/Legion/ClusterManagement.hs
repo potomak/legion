@@ -21,6 +21,7 @@ module Network.Legion.ClusterManagement (
   send,
   forward,
   requestJoin,
+  requestRejoin,
   claim,
   merge
 ) where
@@ -637,6 +638,20 @@ requestJoin J {csT, cm, self, journal} addr = do
     return $ do
       journal (updateId, thisUpdate)
       return cs2 {csSelf = peer}
+
+
+{- |
+  Maybe allow an old peer to re-join the cluster after it crashed or
+  was shut down, and tell it what its new `ClusterState` should be.
+-}
+requestRejoin :: Cluster -> ClusterState -> IO (Either String ClusterState)
+requestRejoin J {csT} other = atomically $ do
+  cs <- readTVar csT
+  if csSelf other `elem` keys (csPeers cs)
+    then return (Right other)
+    else return . Left
+      $ "Rejoin request denied. Peer " ++ show (csSelf other)
+      ++ " was never a member of this cluster."
 
 
 {- |

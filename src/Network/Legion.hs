@@ -63,7 +63,8 @@ import Network.Legion.ClusterManagement (self, recover, newCluster,
   Cluster, distribution, current, PeerMessage(PeerMessage, source,
   messageId, payload), PeerMessagePayload(StoreState, StoreAck,
   ForwardRequest, ForwardResponse, UpdateCluster), send, forward,
-  MessageId, ClusterState, requestJoin, peers, initManager, claim)
+  MessageId, ClusterState, requestJoin, peers, initManager, claim,
+  requestRejoin)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (KeySet, findPartition, Peer,
   PartitionKey(K, unkey), rebalanceAction, RebalanceAction(Move), Replica,
@@ -172,9 +173,8 @@ makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
     mj <- recover journal
     infoM "Trying to join an existing cluster."
     clusterState <- case mj of
-      Nothing -> joinCluster
-      Just lastCS ->
-        rejoinCluster lastCS
+      Nothing -> joinCluster (JoinRequest (BSockAddr peerBindAddr))
+      Just lastCS -> joinCluster (RejoinRequest lastCS)
     cluster <- initManager journal clusterState
     return NodeState {
         cluster,
@@ -182,10 +182,10 @@ makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
         forwarded = Map.empty
       }
   where
-    joinCluster = do
+    joinCluster joinMsg = do
       so <- socket (fam addr) Stream defaultProtocol
       connect so addr
-      sendAll so (encode (JoinRequest (BSockAddr peerBindAddr)))
+      sendAll so (encode joinMsg)
       -- using sourceSocket and conduitDecode is easier than building
       -- a recive/decode state loop, even though we only read a single
       -- response.
@@ -195,9 +195,11 @@ makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
           Nothing -> error 
             $ "Couldn't join a cluster because there was no response "
             ++ "to our join request!"
-          Just (JoinResponse clusterState) ->
+          Just (JoinOk clusterState) ->
             return clusterState
-    rejoinCluster = error "rejoinCluster undefined"
+          Just (JoinRejected reason) -> error
+            $ "The cluster would not allow us to re-join. "
+            ++ "The reason given was: " ++ show reason
 
 
 -- $service-implementaiton
@@ -549,14 +551,20 @@ data HandoffState = HandoffState {
 {- |
   This is the type of a join request message.
 -}
-data JoinRequest = JoinRequest BSockAddr deriving (Generic, Show)
+data JoinRequest
+  = JoinRequest BSockAddr
+  | RejoinRequest ClusterState
+  deriving (Generic, Show)
 instance Binary JoinRequest
 
 
 {- |
   The response to a JoinRequst message
 -}
-data JoinResponse = JoinResponse ClusterState deriving (Generic)
+data JoinResponse
+  = JoinOk ClusterState
+  | JoinRejected String
+  deriving (Generic)
 instance Binary JoinResponse
 
 
@@ -767,7 +775,17 @@ handleJoinRequest
     (JoinRequest peerAddr, respond)
   = do
     peerCS <- requestJoin cluster (getAddr peerAddr)
-    respond (JoinResponse peerCS)
+    respond (JoinOk peerCS)
+    return ns
+
+handleJoinRequest
+    ns@NodeState {cluster}
+    (RejoinRequest otherCS, respond)
+  = do
+    result <- requestRejoin cluster otherCS
+    case result of
+      Left err -> respond (JoinRejected err)
+      Right newCS -> respond (JoinOk newCS)
     return ns
 
 
