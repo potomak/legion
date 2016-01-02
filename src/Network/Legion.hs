@@ -81,8 +81,8 @@ import qualified Data.HexString as Hex (toText)
 import qualified Data.Map as Map (keys, empty, member)
 import qualified Data.Set as Set (delete, null, member)
 import qualified Data.Text as T (unpack)
-import qualified Network.Legion.Distribution as KD (member)
 import qualified Network.Legion.ClusterManagement as CM (merge)
+import qualified Network.Legion.Distribution as KD (member)
 import qualified System.Log.Logger as L (debugM, warningM, errorM, infoM)
 
 -- $invocation
