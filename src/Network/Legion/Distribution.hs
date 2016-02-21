@@ -1,241 +1,87 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveGeneric #-}
 {- |
   This module defines the data structures and functions used for handling the
   key space distribution.
 -}
 module Network.Legion.Distribution (
-  PartitionKey(..),
-  PartitionDistribution,
-  PartitionState(..),
-  KeySet,
-  Replica(..),
-  member,
+  ParticipationDefaults,
   Peer,
   empty,
+  modify,
   findPartition,
-  peerOwns,
-  update,
-  delete,
-  fromRange,
-  size,
   rebalanceAction,
   RebalanceAction(..)
 ) where
 
-import Prelude hiding (lookup, take)
+import Prelude hiding (null)
 
-import Control.Applicative ((<$>))
-import Data.Binary (Binary(put, get))
-import Data.ByteString.Lazy (ByteString)
-import Data.DoubleWord (Word256(Word256), Word128(Word128))
+import Data.Binary (Binary)
 import Data.Function (on)
-import Data.List (sortBy)
-import Data.Map (Map, toList, lookup, adjust, singleton, unionWith)
-import Data.Maybe (fromMaybe)
-import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
-  BoundaryAbove, BoundaryAboveAll, BoundaryBelowAll), makeRangedSet,
-  rSetHas, rSetUnion, (-!-), unsafeRangedSet, rSetRanges,
-  DiscreteOrdered(adjacent, adjacentBelow))
-import Data.Set (Set, fromList)
+import Data.List (sort, sortBy)
+import Data.Set (Set, toList)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
-import qualified Data.Map as Map (empty, union, foldr)
+import Network.Legion.KeySet (KeySet, member, (\\), null)
+import Network.Legion.PartitionKey (PartitionKey)
+import qualified Data.Set as Set (empty, size, (\\), member)
+import qualified Network.Legion.KeySet as KS (size)
 
 
 {- |
   The distribution of partitions and partition replicas among the cluster.
 -}
-newtype PartitionDistribution = D {
-    unD :: Map Peer (Map Replica KeySet)
+newtype ParticipationDefaults = D {
+    unD :: [(KeySet, Set Peer)]
   } deriving (Show, Binary)
-
-
-{- |
-  Enumerate the individual replicas.
--}
-data Replica = R1 | R2 | R3 deriving (Eq, Ord, Show, Enum, Bounded, Generic)
-instance Binary Replica
-
-
-{- |
-  This is how partitions are identified and referenced.
--}
-newtype PartitionKey = K {unkey :: Word256} deriving (Eq, Ord, Show, Bounded)
-
-instance Binary PartitionKey where
-  put (K (Word256 (Word128 a b) (Word128 c d))) = put (a, b, c, d)
-  get = do
-    (a, b, c, d) <- get
-    return (K (Word256 (Word128 a b) (Word128 c d)))
-
-instance DiscreteOrdered PartitionKey where
-  adjacent (K a) (K b) = a < b && succ a == b
-  adjacentBelow (K k) = if k == minBound then Nothing else Just (K (pred k))
-
-
-{- |
-  Represents a set of partition keys. This type is intended to have set
-  semantics, but unlike `Data.Set.Set`, it performs well with dense sets
-  because it only stores the set of continuous ranges in memory.
--}
-newtype KeySet = S {unS :: RSet PartitionKey} deriving (Show)
-
-instance Binary KeySet where
-  put =
-      put . fmap encodeRange . rSetRanges . unS
-    where
-      encodeRange (Range a b) = (boundaryToBin a, boundaryToBin b)
-      boundaryToBin :: Boundary a -> BinBoundary a
-      boundaryToBin (BoundaryBelow a) = BinBelow a
-      boundaryToBin (BoundaryAbove a) = BinAbove a
-      boundaryToBin BoundaryBelowAll = BinBelowAll
-      boundaryToBin BoundaryAboveAll = BinAboveAll
-  get =
-      (S . unsafeRangedSet . fmap decodeRange) <$> get
-    where
-      decodeRange (a, b) = Range (binToBoundary a) (binToBoundary b)
-      binToBoundary :: BinBoundary a -> Boundary a
-      binToBoundary (BinBelow a) = BoundaryBelow a
-      binToBoundary (BinAbove a) = BoundaryAbove a
-      binToBoundary BinBelowAll = BoundaryBelowAll
-      binToBoundary BinAboveAll = BoundaryAboveAll
 
 
 {- |
   Constuct a distribution that contains no partitions.
 -}
-empty :: PartitionDistribution
-empty = D Map.empty
+empty :: ParticipationDefaults
+
+empty = D []
 
 
 {- |
   Find the peers that own the specified partition.
 -}
-findPartition :: PartitionKey -> PartitionDistribution -> Set Peer
-findPartition k (D d) =
-  fromList [p | (p, kss) <- toList d, (_r, ks) <- toList kss, k `member` ks]
+findPartition :: PartitionKey -> ParticipationDefaults -> Set Peer
+
+findPartition k d =
+  case [ps | (ks, ps) <- unD d, k `member` ks] of
+    [ps] -> ps
+    _ -> error
+      $ "No exact mach for key in distribution. This means there is a bug in "
+      ++ "the module `Network.Legion.Distribution`. Please report this bug "
+      ++ "via github: " ++ show (k, d)
 
 
 {- |
-  Find all of they keys that the specified peer owns.
+  Modify the default participation for the key set.
 -}
-peerOwns
-  :: Peer
-  -> PartitionDistribution
-  -> Map Replica KeySet
-peerOwns p (D d) = fromMaybe Map.empty (lookup p d)
+modify
+  :: (Set Peer -> Set Peer)
+  -> KeySet
+  -> ParticipationDefaults
+  -> ParticipationDefaults
 
-
-{- |
-  Update the distribution so that the specified peer owns all of the
-  partitions within the specified key set.
--}
-update
-  :: Peer
-  -> Map Replica KeySet
-  -> PartitionDistribution
-  -> PartitionDistribution
-update p r =
-  D . unionWith Map.union (singleton p r) . unD . delete r
-
-
-{- |
-  Remove all partitions identified by the key set from the distribution.
--}
-delete
-  :: Map Replica KeySet
-  -> PartitionDistribution
-  -> PartitionDistribution
-delete ranges dist = 
-    foldr deleteEach dist (toList ranges)
+modify fun keyset =
+    {-
+      doModify can produce key ranges that contain zero keys, which is
+      why the `filter`.
+    -}
+    D . filter (not . null . fst) . doModify keyset . unD
   where
-    deleteEach (r, ks) = D . fmap (adjust (\\ ks) r) . unD
-
-
-{- |
-  Construct the set of all partition keys within the specified range. Both the
-  start element and the end element are inclusive.
--}
-fromRange :: PartitionKey -> PartitionKey -> KeySet
-fromRange a b
-  | a > b = fromRange b a
-  | otherwise = S (makeRangedSet [Range (BoundaryBelow a) (BoundaryAbove b)])
-
-
-{- |
-  Construct an empty `KeySet`.
--}
-emptyKS :: KeySet
-emptyKS = S rSetEmpty
-
-
-{- |
-  Take the difference of the two sets.
--}
-(\\) :: KeySet -> KeySet -> KeySet
-S a \\ S b = S (a -!- b)
-
-
-{- |
-  Test for set membership.
--}
-member :: PartitionKey -> KeySet -> Bool
-member k = flip rSetHas k . unS
-
-
-{- |
-  Take the union of the two sets.
--}
-union :: KeySet -> KeySet -> KeySet
-union (S a) (S b) = S (a `rSetUnion` b)
-
-
-{- |
-  Used to help with the Binary instance of KeySet.
--}
-data BinBoundary a
-  = BinAbove a
-  | BinBelow a
-  | BinAboveAll
-  | BinBelowAll
-  deriving (Generic)
-instance (Binary a) => Binary (BinBoundary a)
-
-
-{- |
-  Figure out how large a `KeySet` is.
--}
-size :: KeySet -> Integer
-size = sum . fmap rangeSize . rSetRanges . unS
-
-
-{- |
-  Figure out how large a particular range is.
--}
-rangeSize :: Range PartitionKey -> Integer
-rangeSize (Range BoundaryBelowAll b) = rangeSize (Range (BoundaryBelow minBound) b)
-rangeSize (Range BoundaryAboveAll b) = rangeSize (Range (BoundaryAbove maxBound) b)
-rangeSize (Range a BoundaryBelowAll) = rangeSize (Range a (BoundaryBelow minBound))
-rangeSize (Range a BoundaryAboveAll) = rangeSize (Range a (BoundaryAbove maxBound))
-rangeSize (Range (BoundaryAbove a) (BoundaryAbove b)) = toI b - toI a
-rangeSize (Range (BoundaryBelow a) (BoundaryBelow b)) = toI b - toI a
-rangeSize (Range (BoundaryAbove a) (BoundaryBelow b)) = (toI b - toI a) - 1
-rangeSize (Range (BoundaryBelow a) (BoundaryAbove b)) = (toI b - toI a) + 1
-
-
-{- |
-  To help with `rangeSize`.
--}
-toI :: PartitionKey -> Integer
-toI = toInteger . unkey
-
-
-{- |
-  Opposite of `toI`
--}
-fromI :: Integer -> PartitionKey
-fromI = K . fromInteger
+    doModify ks [] = [(ks, fun Set.empty)]
+    doModify ks ((r, ps):dist) =
+      let {
+        unaffected = r \\ ks;
+          affected = r \\ unaffected;
+         remaining = ks \\ affected;
+      } in
+      (unaffected, ps):(affected, fun ps):doModify remaining dist
 
 
 {- |
@@ -248,98 +94,86 @@ type Peer = UUID
   Return the best action, if any, that the indicated peer should take to
   rebalance an unbalanced distribution.
 -}
-rebalanceAction :: Peer -> PartitionDistribution -> Maybe RebalanceAction
-rebalanceAction peer (D dist) = 
-    -- TODO: first figure out if any replicas need re-building.
-    case sortBy (weight `on` snd) (toList dist) of
-      (p, keyspace):remaining@(_:_) | p == peer ->
-        let (target, targetSpace) = last remaining 
-            {- |
-              Keys that already exist at the target, no matter what
-              replica, are not eligible for being moved.
-            -}
-            targetKeys = Map.foldr union emptyKS targetSpace
-            eligibleSpace = fmap (\\ targetKeys) keyspace
-            migrationSize = (weightOf keyspace - weightOf targetSpace) `div` 2
-            migrants = pickMigrants migrationSize eligibleSpace
-        in
-        case migrants of
-          Just (replica, keys) -> Just (Move target replica keys)
-          Nothing -> Nothing
-      _ -> Nothing
+rebalanceAction
+  :: Peer
+  -> Set Peer
+  -> ParticipationDefaults
+  -> Maybe RebalanceAction
+rebalanceAction self allPeers (D dist) =
+    rebuild
+    {- TODO rebalance -}
   where
-    weight
-      :: Map Replica KeySet
-      -> Map Replica KeySet
-      -> Ordering
-    weight = flip compare `on` weightOf
+    _rebalance :: a
+    _rebalance = error "rebalance undefined"
+    rebuild =
+      let
+        underserved = {- t "underserved" -} [
+            (ks, ps) |
+            (ks, ps) <- {- t "dist" -} dist,
+            Set.size ps < 3,
+            not (self `Set.member` ps)
+          ]
+        mostUnderserved = sortBy (compare `on` Set.size . snd) underserved
+      in case {- t "mostUnderserved" -} mostUnderserved of
+        [] -> Nothing
+        (ks, ps):_ -> 
+          let
+            candidateHosts = toList (allPeers Set.\\ ps)
+            bestHosts = sort [(weightOf p, p) | p <- candidateHosts]
+          in case {- t "bestHosts" -} bestHosts of
+            {- we are the best host -}
+            (_, candidate):_ | candidate == self -> Just (Invite ks)
+            _ -> Nothing
 
-    weightOf :: Map Replica KeySet -> Integer
-    weightOf = Map.foldr (+) 0 . fmap size
+    weightOf p = sum [KS.size ks | (ks, ps) <- dist, p `Set.member` ps]
 
-    pickMigrants :: Integer -> Map Replica KeySet -> Maybe (Replica, KeySet)
-    pickMigrants n keyspace =
-      case sortBy (flip compare `on` size . snd) (toList keyspace) of
-        (r, ks):_ ->
-          let migrants = take n ks in
-          if size migrants > 0
-            then Just (r, migrants)
-            else Nothing 
-        _ -> Nothing
+--     -- TODO: first figure out if any replicas need re-building.
+--     case sortBy (weight `on` snd) (toList dist) of
+--       (p, keyspace):remaining | p == peer ->
+--         case reverse remaining of
+--           [] -> Nothing
+--           (target, targetSpace):_ ->
+--             let
+--                 {- |
+--                   Keys that already exist at the target are not eligible
+--                   for being moved.
+--                 -}
+--                 eligibleSpace = keyspace \\ targetSpace
+--                 migrationSize = (size keyspace - size targetSpace) `div` 2
+--                 migrants = pickMigrants migrationSize eligibleSpace
+--             in
+--             case migrants of
+--               Just keys -> Just (Move target keys)
+--               Nothing -> Nothing
+--       _ -> Nothing
+--   where
+--     weight
+--       :: KeySet
+--       -> KeySet
+--       -> Ordering
+--     weight = flip compare `on` size
+-- 
+--     pickMigrants :: Integer -> KeySet -> Maybe KeySet
+--     pickMigrants n keyspace =
+--       let migrants = take n keyspace in
+--       if size migrants > 0
+--         then Just migrants
+--         else Nothing 
 
 
 {- |
   The actions that are taken in order to build a balanced cluster.
 -}
 data RebalanceAction
-  = Move Peer Replica KeySet
-  deriving (Show)
-
-
-{- |
-  Take the first n values from a KeySet.
--}
-take :: Integer -> KeySet -> KeySet
-take num set =
-    S $ doTake num [] (rSetRanges (unS set))
-  where
-    doTake 0 acc _ = makeRangedSet acc
-    doTake _ acc [] = makeRangedSet acc
-    doTake n acc (first:remaining)
-        | firstSize <= n =
-            doTake (n - firstSize) (acc ++ [first]) remaining
-        | otherwise =
-            makeRangedSet (acc ++ [takeRange n first])
-      where
-        firstSize = rangeSize first
-
-    takeRange
-      :: Integer
-      -> Range PartitionKey
-      -> Range PartitionKey
-    takeRange n (Range BoundaryBelowAll b) =
-      takeRange n (Range (BoundaryBelow minBound) b)
-    takeRange n (Range BoundaryAboveAll b) =
-      takeRange n (Range (BoundaryAbove minBound) b)
-    takeRange n (Range (BoundaryAbove a) _) =
-      Range (BoundaryAbove a) (BoundaryAbove (fromI (toI a + n)))
-    takeRange n (Range (BoundaryBelow a) _) =
-      Range (BoundaryBelow a) (BoundaryBelow (fromI (toI a + n)))
-
-
-{- |
-  This is the mutable state associated with a particular key. In a key/value
-  system, this would be the value.
-
-  The partition state is represented as an opaque byte string, and it
-  is up to the service implementation to make sure that the binary data
-  is encoded and decoded into whatever form the service needs.
--}
-newtype PartitionState = PartitionState {
-    unstate :: ByteString
-  }
+  = Invite KeySet
   deriving (Show, Generic)
+instance Binary RebalanceAction
 
-instance Binary PartitionState
+
+-- {- |
+--   Trace helper
+-- -}
+-- t :: (Show a) => String -> a -> a
+-- t msg a = trace (msg ++ ": " ++ show a) a
 
 

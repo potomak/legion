@@ -10,27 +10,27 @@ module Network.Legion.Conduit (
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import Control.Monad (void, forever)
-import Control.Monad.Trans.Class (lift)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Conduit (Source, Sink, ($$), await, ($=), yield, await)
 import qualified Data.Conduit.List as CL (map)
 
 {- |
   Convert a chanel into a Source.
 -}
-chanToSource :: Chan a -> Source IO a
-chanToSource chan = forever $ yield =<< lift (readChan chan)
+chanToSource :: (MonadIO io) => Chan a -> Source io a
+chanToSource chan = forever $ yield =<< liftIO (readChan chan)
 
 
 {- |
  Convert an chanel into a Sink.
 -}
-chanToSink :: Chan a -> Sink a IO ()
+chanToSink :: (MonadIO io) => Chan a -> Sink a io ()
 chanToSink chan = do
   val <- await
   case val of
     Nothing -> return ()
     Just v -> do
-      lift (writeChan chan v)
+      liftIO (writeChan chan v)
       chanToSink chan
 
 
@@ -43,11 +43,11 @@ chanToSink chan = do
   that same source, but the interleaving of items from both sources
   is nondeterministic.
 -}
-merge :: Source IO a -> Source IO b -> Source IO (Either a b)
+merge :: (MonadIO io) => Source IO a -> Source IO b -> Source io (Either a b)
 merge left right = do
-  chan <- lift newChan
-  (lift . void . forkIO) (left $= CL.map Left $$ chanToSink chan)
-  (lift . void . forkIO) (right $= CL.map Right $$ chanToSink chan)
+  chan <- liftIO newChan
+  (liftIO . void . forkIO) (left $= CL.map Left $$ chanToSink chan)
+  (liftIO . void . forkIO) (right $= CL.map Right $$ chanToSink chan)
   chanToSource chan
 
 

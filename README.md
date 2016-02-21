@@ -14,7 +14,22 @@
         - [Code Quality](#code-quality)
 
 
-Legion is a haskell framework that abstracts state partitioning, data
+Legion is a mathematically sound framework for writing horizontally
+scalable user applications. Historically, horizontal scalability has
+been achieved via the property of statelessness. Programmers would
+design their applications to be free of any kind of persistent state,
+avoiding the problem of distributed state management. This almost never
+turns out to really be possible, so programmers achieve "statelessness"
+by delegating application state management to some kind of external,
+shared database -- which ends up having its own scalability problems.
+
+In addition to scalability problems, which modern databases (especially NoSQL
+databases) have done a good job of solving, there is another, more fundamental
+problem facing these architectures: The application is not really stateless.
+
+
+
+Legion is a Haskell framework that abstracts state partitioning, data
 replication, request routing, and cluster rebalancing, making it easy
 to implement large and robust distributed data applications.
 
@@ -71,77 +86,6 @@ Homogeneously scalable systems generally require:
 
 ## Development Status
 
-The Legion framework is still under heavy development. Right now I'm
-working on the rebalancing functionality, and I haven't started on the
-data replication part yet. The plan for data replication is to encode
-the partition state into a graph-based CRDT, with nodes representing
-individual requests. The signature for the user-implemented requests is
-pure, i.e. it is not in the IO monad, so unless the user does something
-unsafe, then request application should be fully deterministic, allowing
-the graph CRDT to work.
-
-### TODO
-
-#### Connection Manager
-
-- Figure out a way to reliably broadcast, possibly using a gossip protocol
-  or something.
-
-#### Balancing algorithm
-
-- Don't treat the entire keyspace as equal. Balance the cluster according to
-  partition "weight". The simplest implementation could be that a partition has
-  a weight of 1 if it exists and a weight of 0 if it does not exists, but
-  probably something based on the size of the raw partition data would be
-  better. In the future we might also try to figure out a way to calculate a
-  value for "weight" that means "projected CPU load", so we can balance evenly
-  across CPU resources as well as space.
-
-- Think about introducing the idea of node capacity, rather than assuming a
-  strictly homogeneous cluster.
-
-- Figure out how and when to eject and blacklist a node from the cluster, and
-  how to reclaim (or rebuild, once data replication happens) the partitions
-  handled by that node.
-
-- Implement the custom node discovery stuff.
-
-- Add some kind of human-readable "cluster name" to the UDP-multicast discovery
-  mechanism, so that multiple developers in the same office won't be joining up
-  to one another (to say nothing of production systems).
-
-- Extend the persistence layer so that it is easier to delete ranges of
-  keys (which happens as a result of rebalancing)
-
-
-#### Routing
-
-- Don't use the network stack to route message locally.
-
-- Maybe don't even use the routing mechanism to handle user requests destined
-  for the local peer.
-
-- When handling `ForwardRequest` messages, make sure to re-forward in case
-  someone forwarded the request to the wrong node.
-
-#### Missing Functionality
-
-- Recovery Startup Mode
-
-- Data Replication
-
-- Think about how we might allow the user-provided request handler to
-  be written in other languages.
-
-#### Code Quality
-
-- Factor out all the things that get written to the journal into a
-  `ClusterState` type, and instead of specifically crafting operations
-  to write to the journal, just "update" the journal with the entire
-  cluster state, but have the implementation be smart enough to compute a
-  delta instead of storing the whole thing. This will eliminate the need
-  for the calling side to know how and when the cluster state changes,
-  making the program way more maintainable.
-
+The Legion framework is still pre-alpha.
 
 -

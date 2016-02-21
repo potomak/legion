@@ -5,7 +5,6 @@ module Network.Legion.BSockAddr (
   BSockAddr(..)
 ) where
 
-import Control.Applicative ((<$>))
 import Data.Binary (Binary(put, get))
 import Data.Word (Word8)
 import Network.Socket (SockAddr(SockAddrInet, SockAddrInet6, SockAddrUnix,

@@ -1,5 +1,10 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {- |
   Legion is a framework designed to help people implement large-scale
   distributed stateful services that function using a value-space
@@ -20,12 +25,14 @@ module Network.Legion (
   StartupMode(..),
   -- * Service Implementation
   -- $service-implementaiton
+  LegionConstraints,
   Legionary(..),
   Persistence(..),
+  ApplyDelta(..),
+  Bottom(..),
   RequestMsg,
   -- * Fundamental Types
   PartitionKey(..),
-  PartitionState(..),
   -- * Framework Configuration
   -- $framework-config
   LegionarySettings(..),
@@ -36,55 +43,65 @@ module Network.Legion (
 
 import Prelude hiding (lookup, readFile, writeFile, null)
 
-import Control.Applicative ((<$>))
-import Control.Concurrent (forkIO)
-import Control.Concurrent.Chan (newChan, writeChan)
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.Chan (newChan, writeChan, Chan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
-import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TVar (newTVar, modifyTVar, readTVar)
-import Control.Exception (throw, try, SomeException, catch)
-import Control.Monad (void, forever, join)
+import Control.Concurrent.STM (atomically, newTVar, modifyTVar, readTVar,
+  TVar)
+import Control.Exception (throw)
+import Control.Monad (void, forever, join, (>=>))
+import Control.Monad.Catch (catchAll, try, SomeException, throwM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
+import Control.Monad.Logger (logDebug, logWarn, logError, logInfo,
+  MonadLoggerIO, runLoggingT, askLoggerIO)
 import Control.Monad.Trans.Class (lift)
 import Data.Binary (Binary, encode, decode)
 import Data.Bool (bool)
 import Data.ByteString (readFile, writeFile)
 import Data.ByteString.Lazy (toStrict, fromStrict)
-import Data.Conduit (Source, Sink, ($$), ($=), yield, await, awaitForever)
+import Data.Conduit (Source, Sink, ($$), (=$=), yield, await, awaitForever,
+  transPipe, ConduitM)
 import Data.Conduit.List (sourceList)
 import Data.Conduit.Network (sourceSocket)
 import Data.Conduit.Serialization.Binary (conduitDecode)
-import Data.HexString (hexString, fromBytes, toBytes)
-import Data.Map (Map, insert, delete, lookup, singleton)
-import Data.Set (Set, fromList, toDescList, toList)
+import Data.Either (rights)
+import Data.Map (Map, insert, lookup)
+import Data.Maybe (fromMaybe)
+import Data.Set (member, minView, (\\))
+import Data.Text (pack)
+import Data.Time.Clock (getCurrentTime)
+import Data.UUID (UUID)
+import Data.UUID.V1 (nextUUID)
 import GHC.Generics (Generic)
-import Network.Legion.BSockAddr (BSockAddr(BSockAddr), getAddr)
-import Network.Legion.ClusterManagement (self, recover, newCluster,
-  Cluster, distribution, current, PeerMessage(PeerMessage, source,
-  messageId, payload), PeerMessagePayload(StoreState, StoreAck,
-  ForwardRequest, ForwardResponse, UpdateCluster), send, forward,
-  MessageId, ClusterState, requestJoin, peers, initManager, claim,
-  requestRejoin)
+import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
+import Network.Legion.Bottom (Bottom, bottom)
+import Network.Legion.ClusterState (ClusterPowerState, claimParticipation,
+  ClusterPropState, getPeers, getDistribution)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
-import Network.Legion.Distribution (KeySet, findPartition, Peer,
-  PartitionKey(K, unkey), rebalanceAction, RebalanceAction(Move), Replica,
-  PartitionState(PartitionState, unstate))
+import Network.Legion.ConnectionManager (ConnectionManager,
+  PeerMessage(PeerMessage, source, messageId, payload),
+  PeerMessagePayload(PartitionMerge, ForwardRequest, ForwardResponse,
+  ClusterMerge), MessageId, send, forward, newPeers, newConnectionManager)
+import Network.Legion.Distribution (Peer, rebalanceAction,
+  RebalanceAction(Invite))
 import Network.Legion.Fork (forkC)
+import Network.Legion.KeySet (union, KeySet)
+import Network.Legion.LIO (LIO)
+import Network.Legion.PartitionKey (PartitionKey(K, unkey), toHex, fromHex)
+import Network.Legion.PartitionState(PartitionPowerState, PartitionPropState)
+import Network.Legion.PowerState (ApplyDelta(apply))
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
   defaultProtocol, listen, setSocketOption, socket, SockAddr(SockAddrInet,
-  SockAddrInet6, SockAddrUnix, SockAddrCan), connect, getPeerName)
+  SockAddrInet6, SockAddrUnix, SockAddrCan), connect, getPeerName, Socket)
 import Network.Socket.ByteString.Lazy (sendAll)
 import System.Directory (removeFile, doesFileExist, getDirectoryContents)
-import qualified Data.ByteString.Char8 as B (pack)
-import qualified Data.Conduit.List as CL (map, filter, consume)
-import qualified Data.HexString as Hex (toText)
-import qualified Data.Map as Map (keys, empty, member)
-import qualified Data.Set as Set (delete, null, member)
-import qualified Data.Text as T (unpack)
-import qualified Network.Legion.ClusterManagement as CM (merge)
-import qualified Network.Legion.Distribution as KD (member)
-import qualified System.Log.Logger as L (debugM, warningM, errorM, infoM)
+import qualified Data.Conduit.List as CL
+import qualified Data.Map as Map
+import qualified Data.Set as Set
+import qualified Network.Legion.ClusterState as C
+import qualified Network.Legion.KeySet as KS
+import qualified Network.Legion.PartitionState as P
 
 -- $invocation
 -- Notes on invocation.
@@ -93,23 +110,25 @@ import qualified System.Log.Logger as L (debugM, warningM, errorM, infoM)
   Forks the legion framework in a background thread, and returns a way to
   send user requests to it and retrieve the responses to those requests.
 -}
-forkLegionary :: (Binary response, Binary request)
-  => Legionary request response
-    -- ^ The user-defined legion application to run.
+forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
+  => Legionary i o s
+    {- ^ The user-defined legion application to run. -}
   -> LegionarySettings
-    -- ^ Settings and configuration of the legionary framework.
+    {- ^ Settings and configuration of the legionary framework. -}
   -> StartupMode
-  -> IO (PartitionKey -> request -> IO response)
-forkLegionary legionary settings startupMode = do
-  chan <- newChan
-  forkC "main legion thread" $
-    runLegionary legionary settings startupMode (chanToSource chan)
-  return (\ key request -> do
-      responseVar <- newEmptyMVar
-      writeChan chan ((key, request), putMVar responseVar)
-      takeMVar responseVar
-    )
+  -> io (PartitionKey -> i -> IO o)
 
+forkLegionary legionary settings startupMode = do
+  logging <- askLoggerIO
+  liftIO . (`runLoggingT` logging) $ do
+    chan <- liftIO newChan
+    forkC "main legion thread" $
+      runLegionary legionary settings startupMode (chanToSource chan)
+    return (\ key request -> do
+        responseVar <- newEmptyMVar
+        writeChan chan ((key, request), putMVar responseVar)
+        takeMVar responseVar
+      )
 
 {- |
   Run the legion node framework program, with the given user definitions,
@@ -121,83 +140,111 @@ forkLegionary legionary settings startupMode = do
   request source, and to handle the responses. Unless you know exactly
   what you are doing, you probably want to use `forkLegionary` instead.
 -}
-runLegionary :: (Binary response, Binary request)
-  => Legionary request response
+runLegionary :: (LegionConstraints i o s)
+  => Legionary i o s
     -- ^ The user-defined legion application to run.
   -> LegionarySettings
     -- ^ Settings and configuration of the legionary framework.
   -> StartupMode
-  -> Source IO (RequestMsg request response)
+  -> Source IO (RequestMsg i o)
     -- ^ A source of requests, together with a way to respond to the requets.
-  -> IO ()
+  -> LIO ()
+
 runLegionary
     legionary
     settings@LegionarySettings {}
     startupMode
     requestSource
   = do
-    peerS <- startPeerListener settings
+    peerS <- loggingC =<< startPeerListener settings
     nodeState <- makeNodeState settings startupMode
-    infoM ("The initial node state is: " ++ show nodeState)
-    let joinS = joinMsgSource settings
+    $(logInfo) . pack
+      $ "The initial node state is: " ++ show nodeState
+    joinS <- loggingC (joinMsgSource settings)
     (joinS `merge` (peerS `merge` requestSource))
-      $= CL.map toMessage
-      $$ requestSink legionary nodeState
+      =$= CL.map toMessage
+      $$  requestSink settings legionary nodeState
   where
+
+    toMessage
+      :: Either
+          (JoinRequest, JoinResponse -> LIO ())
+          (Either (PeerMessage i o s) (RequestMsg i o))
+      -> Message i o s
     toMessage (Left m) = J m
     toMessage (Right (Left m)) = P m
     toMessage (Right (Right m)) = R m
 
+    {- |
+      Turn an LIO-based conduit into an IO-based conduit, so that it
+      will work with `merge`.
+    -}
+    loggingC :: ConduitM i o LIO r -> LIO (ConduitM i o IO r)
+    loggingC c = do
+      logging <- askLoggerIO
+      return (transPipe (`runLoggingT` logging) c)
 
-{- |
-  Figure out how to construct the initial node state.
--}
-makeNodeState
-  :: LegionarySettings
+
+{- | Figure out how to construct the initial node state.  -}
+makeNodeState :: (LegionConstraints i o s)
+  => LegionarySettings
   -> StartupMode
-  -> IO (NodeState response)
-makeNodeState LegionarySettings {journal, peerBindAddr} NewCluster = do
-  -- Build a brand new node state, for the first node in a cluster.
-  cluster <- newCluster journal peerBindAddr
-  cs <- current cluster
-  infoM ("This is a new cluster. The new cluster state is: " ++ show cs)
+  -> LIO (NodeState i o s)
+
+makeNodeState LegionarySettings {peerBindAddr} NewCluster = do
+  {- Build a brand new node state, for the first node in a cluster. -}
+  self <- getUUID
+  clusterId <- getUUID
+  cm <- newConnectionManager self (Map.singleton self peerBindAddr)
+  let
+    cluster :: ClusterPropState
+    cluster = C.new clusterId self peerBindAddr
   return NodeState {
+      self,
+      cm,
       cluster,
-      handoff = Nothing,
-      forwarded = Map.empty
+      forwarded = F Map.empty,
+      propStates = Map.empty,
+      migration = KS.empty
     }
 
-makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
+makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
     -- Join a cluster by either starting fresh, or recovering from a
     -- shutdown or crash.
-    mj <- recover journal
-    infoM "Trying to join an existing cluster."
-    clusterState <- case mj of
-      Nothing -> joinCluster (JoinRequest (BSockAddr peerBindAddr))
-      Just lastCS -> joinCluster (RejoinRequest lastCS)
-    cluster <- initManager journal clusterState
+    $(logInfo) "Trying to join an existing cluster."
+    (self, clusterPS)
+      <- joinCluster (JoinRequest (BSockAddr peerBindAddr))
+    let cluster = C.initProp self clusterPS
+    cm <- newConnectionManager self (Map.singleton self peerBindAddr)
+    newPeers cm (getPeers cluster)
     return NodeState {
+        self,
         cluster,
-        handoff = Nothing,
-        forwarded = Map.empty
+        cm,
+        forwarded = F Map.empty,
+        propStates = Map.empty,
+        migration = KS.empty
       }
   where
-    joinCluster joinMsg = do
+    joinCluster :: JoinRequest -> LIO (Peer, ClusterPowerState)
+    joinCluster joinMsg = liftIO $ do
       so <- socket (fam addr) Stream defaultProtocol
       connect so addr
       sendAll so (encode joinMsg)
-      -- using sourceSocket and conduitDecode is easier than building
-      -- a recive/decode state loop, even though we only read a single
-      -- response.
-      sourceSocket so $= conduitDecode $$ do
+      {-
+        using sourceSocket and conduitDecode is easier than building
+        a recive/decode state loop, even though we only read a single
+        response.
+      -}
+      sourceSocket so =$= conduitDecode $$ do
         response <- await
         case response of
-          Nothing -> error 
+          Nothing -> fail 
             $ "Couldn't join a cluster because there was no response "
             ++ "to our join request!"
-          Just (JoinOk clusterState) ->
-            return clusterState
-          Just (JoinRejected reason) -> error
+          Just (JoinOk self cps) ->
+            return (self, cps)
+          Just (JoinRejected reason) -> fail
             $ "The cluster would not allow us to re-join. "
             ++ "The reason given was: " ++ show reason
 
@@ -219,25 +266,36 @@ makeNodeState LegionarySettings {journal, peerBindAddr} (JoinCluster addr) = do
 
 
 {- |
+  This is a more convenient way to write the somewhat unwieldy set of
+  constraints
+   
+  > (
+  >   ApplyDelta i s, Bottom s, Binary i, Binary o, Binary s, Show i,
+  >   Show o, Show s, Eq i
+  > )
+-}
+class (
+    ApplyDelta i s, Bottom s, Binary i, Binary o, Binary s, Show i,
+    Show o, Show s, Eq i
+  ) => LegionConstraints i o s where
+
+
+{- |
   This is the type of a user-defined Legion application. Implement this and
   allow the Legion framework to manage your cluster.
 -}
-data Legionary request response = Legionary {
+data Legionary i o s = Legionary {
     {- |
       The request handler, implemented by the user to service requests.
 
       Returns a response to the request, together with the new partitoin
       state.
     -}
-    handleRequest
-      :: PartitionKey
-      -> request
-      -> Maybe PartitionState
-      -> (response, Maybe PartitionState),
+    handleRequest :: PartitionKey -> i -> s -> o,
     {- |
       The user-defined persistence layer implementation.
     -}
-    persistence :: Persistence
+    persistence :: Persistence i s
   }
 
 
@@ -246,15 +304,16 @@ data Legionary request response = Legionary {
   partition states. See `newMemoryPersistence` or `diskPersistence`
   if you need to get started quicky.
 -}
-data Persistence = Persistence {
-    getState :: PartitionKey -> IO (Maybe PartitionState),
-    saveState :: PartitionKey -> Maybe PartitionState -> IO (),
-    listKeys :: Source IO PartitionKey
-      -- ^ List all the keys known to the persistence layer. It is
-      --   important that the implementation do the right thing with
-      --   regard to `Data.Conduit.addCleanup`, because there are
-      --   cases where the conduit is terminated without reading the
-      --   entire list.
+data Persistence i s = Persistence {
+     getState :: PartitionKey -> IO (Maybe (PartitionPowerState i s)),
+    saveState :: PartitionKey -> Maybe (PartitionPowerState i s) -> IO (),
+         list :: Source IO (PartitionKey, PartitionPowerState i s)
+      {- ^
+        List all the keys known to the persistence layer. It is important
+        that the implementation do the right thing with regard to
+        `Data.Conduit.addCleanup`, because there are cases where the
+        conduit is terminated without reading the entire list.
+      -}
   }
 
 
@@ -268,7 +327,7 @@ data Persistence = Persistence {
   `forkLegionary` instead of `runLegionary` to run the framework, in
   which case you can safely ignore the existence of this type.
 -}
-type RequestMsg request response = ((PartitionKey, request), response -> IO ())
+type RequestMsg i o = ((PartitionKey, i), o -> IO ())
 
 
 -- $framework-config
@@ -277,17 +336,14 @@ type RequestMsg request response = ((PartitionKey, request), response -> IO ())
 -- used to expose the cluster management service endpoint and what file
 -- to use for cluster state journaling.
 
-{- |
-  Settings used when starting up the legion framework.
--}
+{- | Settings used when starting up the legion framework.  -}
 data LegionarySettings = LegionarySettings {
     peerBindAddr :: SockAddr,
       -- ^ The address on which the legion framework will listen for
       --   rebalancing and cluster management commands.
-    joinBindAddr :: SockAddr,
+    joinBindAddr :: SockAddr
       -- ^ The address on which the legion framework will listen for
       --   cluster join requests.
-    journal :: FilePath
   }
 
 
@@ -295,60 +351,86 @@ data LegionarySettings = LegionarySettings {
   A convenient memory-based persistence layer. Good for testing or for
   applications (like caches) that don't have durability requirements.
 -}
-newMemoryPersistence :: IO Persistence
+newMemoryPersistence :: IO (Persistence i s)
+
 newMemoryPersistence = do
     cacheT <- atomically (newTVar Map.empty)
     return Persistence {
         getState = fetchState cacheT,
         saveState = saveState_ cacheT,
-        listKeys = listKeys_ cacheT
+        list = list_ cacheT
       }
   where
+    saveState_
+      :: TVar (Map PartitionKey (PartitionPowerState i s))
+      -> PartitionKey
+      -> Maybe (PartitionPowerState i s)
+      -> IO ()
     saveState_ cacheT key (Just state) =
       (atomically . modifyTVar cacheT . insert key) state
 
     saveState_ cacheT key Nothing =
-      (atomically . modifyTVar cacheT . delete) key
+      (atomically . modifyTVar cacheT . Map.delete) key
 
+    fetchState
+      :: TVar (Map PartitionKey (PartitionPowerState i s))
+      -> PartitionKey
+      -> IO (Maybe (PartitionPowerState i s))
     fetchState cacheT key = atomically $
       lookup key <$> readTVar cacheT
     
-    listKeys_ cacheT =
-      sourceList . Map.keys =<< lift (atomically (readTVar cacheT))
+    list_
+      :: TVar (Map PartitionKey (PartitionPowerState i s))
+      -> Source IO (PartitionKey, PartitionPowerState i s)
+    list_ cacheT =
+      sourceList . Map.toList =<< lift (atomically (readTVar cacheT))
 
 
-{- |
-  A convenient way to persist partition states to disk.
--}
-diskPersistence
-  :: FilePath
+{- | A convenient way to persist partition states to disk.  -}
+diskPersistence :: (Binary i, Binary s)
+  => FilePath
     -- ^ The directory under which partition states will be stored.
-  -> Persistence
+  -> Persistence i s
+
 diskPersistence directory = Persistence {
       getState,
       saveState,
-      listKeys
+      list
     }
   where
+    getState :: (Binary i, Binary s)
+      => PartitionKey
+      -> IO (Maybe (PartitionPowerState i s))
     getState key =
       let path = toPath key in
       doesFileExist path >>= bool
         (return Nothing)
-        ((Just . PartitionState . fromStrict) <$> readFile path)
+        ((Just . decode . fromStrict) <$> readFile path)
 
+    saveState :: (Binary i, Binary s)
+      => PartitionKey
+      -> Maybe (PartitionPowerState i s)
+      -> IO ()
     saveState key (Just state) =
-      writeFile (toPath key) (toStrict (unstate state))
+      writeFile (toPath key) (toStrict (encode state))
     saveState key Nothing =
       let path = toPath key in
       doesFileExist path >>= bool
         (return ())
         (removeFile path)
 
-    listKeys = do
+    list :: (Binary i, Binary s)
+      => Source IO (PartitionKey, PartitionPowerState i s)
+    list = do
         keys <- lift $ readHexList <$> getDirectoryContents directory
-        sourceList keys
+        sourceList keys =$= fillData
       where 
-        readHexList = fmap fromHex . filter notSys
+        fillData = awaitForever (\key -> do
+            let path = toPath key
+            state <- lift ((decode . fromStrict) <$> readFile path)
+            yield (key, state)
+          )
+        readHexList = rights . fmap fromHex . filter notSys
         notSys = not . (`elem` [".", ".."])
 
     {- |
@@ -357,84 +439,91 @@ diskPersistence directory = Persistence {
     toPath :: PartitionKey -> FilePath
     toPath key = directory ++ "/" ++ toHex key
 
-    {- |
-      Convert a partition key to a hexidecimal string.
-    -}
-    toHex :: PartitionKey -> String
-    toHex = T.unpack . Hex.toText . fromBytes . toStrict . encode
 
-    fromHex :: String -> PartitionKey
-    fromHex = decode . fromStrict . toBytes . hexString . B.pack
+handlePeerMessage :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> NodeState i o s
+  -> PeerMessage i o s
+  -> LIO (NodeState i o s)
 
-
-handlePeerMessage :: (Binary response, Binary request)
-  => Legionary request response
-  -> NodeState response
-  -> PeerMessage
-  -> IO (NodeState response)
-
-handlePeerMessage -- StoreState
-    Legionary {persistence}
-    nodeState@NodeState {cluster}
-    PeerMessage {source, messageId, payload = StoreState key state}
+handlePeerMessage -- PartitionMerge
+    Legionary {
+        persistence
+      }
+    nodeState@NodeState {self, propStates, cluster}
+    msg@PeerMessage {
+        source,
+        payload = PartitionMerge key ps
+      }
   = do
-    saveState persistence key state
-    void $ send cluster source (StoreAck messageId)
-    return nodeState
+    propState <- maybe
+      (getStateL persistence self cluster key)
+      return
+      (lookup key propStates)
+    let
+      owners = C.findPartition key cluster
+    case P.mergeEither source ps propState of
+      Left err -> do
+        $(logWarn) . pack
+          $ "Can't apply incomming partition action message "
+          ++ show msg ++ "because of: " ++ show err
+        return nodeState
+      Right newPropState -> do
+        saveStateL persistence key (
+            if P.participating newPropState
+              then Just (P.getPowerState newPropState)
+              else Nothing
+          )
+        return nodeState {
+            propStates = if newPropState == P.new key self owners
+              then Map.delete key propStates
+              else insert key newPropState propStates
+          }
 
 handlePeerMessage -- ForwardRequest
     Legionary {handleRequest, persistence}
-    nodeState@NodeState {cluster, handoff}
+    nodeState@NodeState {self, cm, cluster}
     msg@PeerMessage {
         payload = ForwardRequest key request,
         source,
         messageId
       }
-  | handingOff = do
-    owners <- toList . findPartition key <$> distribution cluster
-    case filter (/= self cluster) owners of
-      [] -> infoM 
-        -- TODO queue these messages up for later.
-        $ "Dropping message on the floor, because we are handing off "
-        ++ "the target key. Message was: " ++ show msg
-      peer:_ ->
-        forward cluster peer msg
-    return nodeState
-  | otherwise = do
-    owners <- findPartition key <$> distribution cluster
-    if self cluster `Set.member` owners
+  = do
+    let owners = C.findPartition key cluster
+    if self `member` owners
       then do
-        let respond = void
-              . send cluster source
-              . ForwardResponse messageId
-              . encode
-        
+        let
+          respond = void
+            . send cm source
+            . ForwardResponse messageId
+
         -- TODO 
         --   - figure out some slick concurrency here, by maintaining
         --       a map of keys that are currently being accessed or
         --       something
-        --   - partitioning, balancing, etc.
         -- 
         either (respond . rethrow) respond =<< try (do 
-            state <- getState persistence key
-            let (response, newState) = handleRequest key (decode request) state
-            saveState persistence key newState
+            prop <- getStateL persistence self cluster key
+            let response = handleRequest key request (P.ask prop)
+                newProp = P.delta request prop
+            saveStateL persistence key (Just (P.getPowerState newProp))
+            $(logInfo) . pack
+              $ "Handling user request: " ++ show request
+            $(logDebug) . pack
+              $ "Request details request: " ++ show prop ++ " ++ "
+              ++ show request ++ " --> " ++ show (response, newProp)
             return response
           )
-      else case toList owners of
+      else
         -- we don't own the key after all, someone was wrong to forward us this
         -- request.
-        [] -> errorM
-          $ "Can't find any owners for the key: " ++ show key
-        peer:_ ->
-          forward cluster peer msg
+        case minView owners of
+          Nothing -> $(logError) . pack
+            $ "Can't find any owners for the key: " ++ show key
+          Just (peer, _) ->
+            forward cm peer msg
     return nodeState
   where
-    handingOff :: Bool
-    handingOff = 
-      case handoff of
-        Just HandoffState {handoffRange} | key `KD.member` handoffRange -> True
-        _ -> False
     {- |
       rethrow is just a reification of `throw`.
     -}
@@ -448,8 +537,8 @@ handlePeerMessage -- ForwardResponse
         payload = ForwardResponse messageId response
       }
   = do
-    case lookup messageId forwarded of
-      Nothing -> warningM
+    case lookup messageId (unF forwarded) of
+      Nothing -> $(logWarn) . pack
         $  "This peer received a response for a forwarded request that it "
         ++ "didn't send. The only time you might expect to see this is if "
         ++ "this peer recently crashed and was immediately restarted. If "
@@ -457,235 +546,199 @@ handlePeerMessage -- ForwardResponse
         ++ "something is very wrong at the network level. The message was: "
         ++ show msg
       Just respond ->
-        respond (decode response)
+        respond response
     return nodeState {
-        forwarded = delete messageId forwarded
+        forwarded = F . Map.delete messageId . unF $ forwarded
       }
 
-handlePeerMessage -- StoreAck
-    Legionary {persistence = Persistence {listKeys, saveState}}
-    nodeState@NodeState {
-        cluster,
-        handoff = Just handoff@HandoffState {
-            expectedAcks,
-            targetPeer,
-            handoffReplica,
-            handoffRange
-          }
-      }
-    PeerMessage {
-        payload = StoreAck messageId
-      }
-  = do
-    let newAcks = Set.delete messageId expectedAcks
-    if Set.null newAcks
-      then do
-        claim cluster targetPeer (singleton handoffReplica handoffRange)
-        listKeys $= CL.filter (`KD.member` handoffRange)
-          $$ awaitForever (lift . (`saveState` Nothing))
-        return nodeState {
-            handoff = Nothing
-          }
-      else
-        return nodeState {
-            handoff = Just handoff {
-                expectedAcks = newAcks
-              }
-          }
-
-handlePeerMessage -- StoreAck
+handlePeerMessage -- ClusterMerge
     Legionary {}
     nodeState@NodeState {
-        handoff = Nothing
-      }
-    msg@PeerMessage {
-        payload = StoreAck _
-      }
-  = do
-    warningM
-      $ "We received an unexpected StoreAck. Probably this is because "
-      ++ "this node crashed during a handoff and got restarted, but "
-      ++ "there is an outside chance that it means something is very "
-      ++ "wrong at the network level. The message was: " ++ show msg
-    return nodeState
-
-handlePeerMessage -- UpdateCluster
-    Legionary {}
-    nodeState@NodeState {
+        migration,
         cluster
       }
-    PeerMessage {
-        payload = UpdateCluster cs
+    msg@PeerMessage {
+        source,
+        payload = ClusterMerge ps
       }
-  = do
-    CM.merge cluster cs
-    return nodeState
-    
+  =
+    case C.mergeEither source ps cluster of
+      Left err -> do
+        $(logWarn) . pack
+          $ "Can't apply incomming cluster action message "
+          ++ show msg ++ "because of: " ++ show err
+        return nodeState
+      Right (newCluster, newMigration) ->
+        return nodeState {
+            migration = migration `union` newMigration,
+            cluster = newCluster
+          }
 
 
-{- |
-  Defines the local state of a node in the cluster.
--}
-data NodeState response = NodeState {
-    cluster :: Cluster,
-    handoff :: Maybe HandoffState,
-    forwarded :: Map MessageId (response -> IO ())
+{- | Defines the local state of a node in the cluster.  -}
+data NodeState i o s = NodeState {
+             self :: Peer,
+               cm :: ConnectionManager i o s,
+          cluster :: ClusterPropState,
+        forwarded :: Forwarded o,
+       propStates :: Map PartitionKey (PartitionPropState i s),
+        migration :: KeySet
   }
-
-instance Show (NodeState response) where
-  show NodeState {handoff} =
-    "(NodeState {cluster = _, handoff = " ++ show handoff
-    ++ ", forwarded = _})"
-
-{- |
-  Defines the state of a handoff.
--}
-data HandoffState = HandoffState {
-    expectedAcks :: Set MessageId,
-    handoffReplica :: Replica,
-    handoffRange :: KeySet,
-    targetPeer :: Peer
-  } deriving (Show)
+  deriving (Show)
 
 
-{- |
-  This is the type of a join request message.
--}
-data JoinRequest
-  = JoinRequest BSockAddr
-  | RejoinRequest ClusterState
+{- | A set of forwardmed messages.  -}
+newtype Forwarded o = F {unF :: Map MessageId (o -> LIO ())}
+instance Show (Forwarded o) where
+  show = show . Map.keys . unF
+
+
+{- | This is the type of a join request message.  -}
+data JoinRequest = JoinRequest BSockAddr
   deriving (Generic, Show)
 instance Binary JoinRequest
 
 
-{- |
-  The response to a JoinRequst message
--}
+{- | The response to a JoinRequst message -}
 data JoinResponse
-  = JoinOk ClusterState
+  = JoinOk Peer ClusterPowerState
   | JoinRejected String
   deriving (Generic)
 instance Binary JoinResponse
 
 
-{- |
-  A source of cluster join request messages.
--}
+{- | A source of cluster join request messages.  -}
 joinMsgSource
   :: LegionarySettings
-  -> Source IO (JoinRequest, JoinResponse -> IO ())
+  -> Source LIO (JoinRequest, JoinResponse -> LIO ())
+
 joinMsgSource LegionarySettings {joinBindAddr} = join . lift $
-    catch (do
-        chan <- newChan
-        so <- socket (fam joinBindAddr) Stream defaultProtocol
-        setSocketOption so ReuseAddr 1
-        bindSocket so joinBindAddr
-        listen so 5
+    catchAll (do
+        (chan, so) <- lift $ do
+          chan <- newChan
+          so <- socket (fam joinBindAddr) Stream defaultProtocol
+          setSocketOption so ReuseAddr 1
+          bindSocket so joinBindAddr
+          listen so 5
+          return (chan, so)
         forkC "join socket acceptor" $ acceptLoop so chan
         return (chanToSource chan)
       ) (\err -> do
-        errorM
+        $(logError) . pack
           $ "Couldn't start join request service, because of: "
           ++ show (err :: SomeException)
-        throw err
+        throwM err
       )
   where
+    acceptLoop :: Socket -> Chan (JoinRequest, JoinResponse -> LIO ()) -> LIO ()
     acceptLoop so chan =
-        catch (
+        catchAll (
           forever $ do
-            (conn, _) <- accept so
-            (void . forkIO . logErrors) (
+            (conn, _) <- lift $ accept so
+            logging <- askLoggerIO
+            (void . lift . forkIO . (`runLoggingT` logging) . logErrors) (
                 sourceSocket conn
-                $= conduitDecode
-                $= logJoinMessage
-                $= attachResponder conn
-                $$ chanToSink chan
+                =$= conduitDecode
+                =$= attachResponder conn
+                $$  chanToSink chan
               )
         ) (\err -> do
-          errorM
+          $(logError) . pack
             $ "error in join request accept loop: "
             ++ show (err :: SomeException)
-          throw err
+          throwM err
         )
       where
-        logJoinMessage = awaitForever $ \msg -> do
-          debugM ("Got JoinRequest: " ++ show msg)
-          yield msg
-          
-        logErrors :: IO () -> IO ()
+        logErrors :: LIO () -> LIO ()
         logErrors io = do
           result <- try io
           case result of
             Left err ->
-              warningM
+              $(logWarn) . pack
                 $ "Incomming join connection crashed because of: "
                 ++ show (err :: SomeException)
             Right v -> return v
 
+        attachResponder
+          :: Socket
+          -> ConduitM JoinRequest (JoinRequest, JoinResponse -> LIO ()) LIO ()
         attachResponder conn = awaitForever (\msg -> do
             mvar <- liftIO newEmptyMVar
-            yield (msg, putMVar mvar)
+            yield (msg, lift . putMVar mvar)
             response <- liftIO $ takeMVar mvar
             liftIO $ sendAll conn (encode response)
           )
 
 
 {- |
-  Construct a source of incoming peer messages.
-  We have to start the peer listener first before we spin up the cluster
-  management, which is why this is an @IO (Source IO PeerMessage)@ instead of a
-  @Source IO PeerMessage@.
+  Construct a source of incoming peer messages.  We have to start the
+  peer listener first before we spin up the cluster management, which
+  is why this is an @LIO (Source LIO PeerMessage)@ instead of a
+  @Source LIO PeerMessage@.
 -}
-startPeerListener :: LegionarySettings -> IO (Source IO PeerMessage)
+startPeerListener :: (LegionConstraints i o s)
+  => LegionarySettings
+  -> LIO (Source LIO (PeerMessage i o s))
+
 startPeerListener LegionarySettings {peerBindAddr} =
-    catch (do
-        inputChan <- newChan
-        so <- socket (fam peerBindAddr) Stream defaultProtocol
-        setSocketOption so ReuseAddr 1
-        bindSocket so peerBindAddr
-        listen so 5
+    catchAll (do
+        (inputChan, so) <- lift $ do
+          inputChan <- newChan
+          so <- socket (fam peerBindAddr) Stream defaultProtocol
+          setSocketOption so ReuseAddr 1
+          bindSocket so peerBindAddr
+          listen so 5
+          return (inputChan, so)
         forkC "peer socket acceptor" $ acceptLoop so inputChan
         return (chanToSource inputChan)
       ) (\err -> do
-        errorM
+        $(logError) . pack
           $ "Couldn't start incomming peer message service, because of: "
           ++ show (err :: SomeException)
-        throw err
+        throwM err
       )
   where
+    acceptLoop :: (LegionConstraints i o s)
+      => Socket
+      -> Chan (PeerMessage i o s)
+      -> LIO ()
     acceptLoop so inputChan =
-        catch (
+        catchAll (
           forever $ do
-            (conn, _) <- accept so
-            remoteAddr <- getPeerName conn
-            (void . forkIO . logErrors remoteAddr) (
-                sourceSocket conn
-                $= conduitDecode
-                $$ msgSink
-              )
+            (conn, _) <- lift $ accept so
+            remoteAddr <- lift $ getPeerName conn
+            logging <- askLoggerIO
+            let runSocket =
+                  sourceSocket conn
+                  =$= conduitDecode
+                  $$  msgSink
+            void
+              . lift
+              . forkIO
+              . (`runLoggingT` logging)
+              . logErrors remoteAddr
+              $ runSocket
         ) (\err -> do
-          errorM
+          $(logError) . pack
             $ "error in peer message accept loop: "
             ++ show (err :: SomeException)
-          throw err
+          throwM err
         )
       where
         msgSink = chanToSink inputChan
 
-        logErrors :: SockAddr -> IO () -> IO ()
+        logErrors :: SockAddr -> LIO () -> LIO ()
         logErrors remoteAddr io = do
           result <- try io
           case result of
             Left err ->
-              warningM
+              $(logWarn) . pack
                 $ "Incomming peer connection (" ++ show remoteAddr
                 ++ ") crashed because of: " ++ show (err :: SomeException)
             Right v -> return v
 
 
-{- |
-  Guess the family of a `SockAddr`.
--}
+{- | Guess the family of a `SockAddr`.  -}
 fam :: SockAddr -> Family
 fam SockAddrInet {} = AF_INET
 fam SockAddrInet6 {} = AF_INET6
@@ -693,146 +746,179 @@ fam SockAddrUnix {} = AF_UNIX
 fam SockAddrCan {} = AF_CAN
 
 
-{- |
-  Shorthand logging.
--}
-warningM :: (MonadIO io) => String -> io ()
-warningM = liftIO . L.warningM "legion"
+{- | This `Sink` is what actually handles all peer messages and user input.  -}
+requestSink :: (LegionConstraints i o s)
+  => LegionarySettings
+  -> Legionary i o s
+  -> NodeState i o s
+  -> Sink (Message i o s) LIO ()
+
+requestSink s l n = awaitForever $
+    lift . handleMessage l n
+    >=> lift . heartbeat
+    >=> lift . migrate l
+    >=> lift . propagate
+    >=> lift . rebalance l
+    >=> logState
+    >=> requestSink s l
+  where
+    logState n2 = lift $ logNodeState n2 >> return n2
 
 
 {- |
-  Shorthand logging.
+  Migrate partitions based on new cluster state information.
+
+  TODO: this migration algorithm is super naive. It just gos ahead and migrates
+  everything in one pass, which is going to be terrible for performance.
 -}
-debugM :: (MonadIO io) => String -> io ()
-debugM = liftIO . L.debugM "legion"
+migrate :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> NodeState i o s
+  -> LIO (NodeState i o s)
+migrate
+    Legionary{persistence}
+    nodeState@NodeState {self, cluster, propStates}
+  =
+    listL persistence $$ accum nodeState {migration = KS.empty}
+  where
+    accum ns = await >>= \case
+      Nothing -> return ns
+      Just (key, ps) -> 
+        let
+          origProp = fromMaybe (P.initProp self ps) (lookup key propStates)
+          newPeers_ = C.findPartition key cluster \\ P.projParticipants origProp
+          newProp = foldr P.participate origProp (Set.toList newPeers_)
+        in do
+          lift (saveStateL persistence key (Just (P.getPowerState newProp)))
+          accum ns {
+              propStates = Map.insert key newProp propStates
+            }
+
+
+{- | Update all of the propagation states with the current time.  -}
+heartbeat :: NodeState i o s -> LIO (NodeState i o s)
+heartbeat ns@NodeState {cluster, propStates} = do
+  now <- lift getCurrentTime
+  return ns {
+      cluster = C.heartbeat now cluster,
+      propStates = Map.fromAscList [
+          (k, P.heartbeat now p)
+          | (k, p) <- Map.toAscList propStates
+        ]
+    }
 
 
 {- |
-  Shorthand logging.
+  Handle all cluster and partition state propagation actions, and return
+  an updated node state.
 -}
-infoM :: String -> IO ()
-infoM = L.infoM "legion"
+propagate :: (LegionConstraints i o s)
+  => NodeState i o s
+  -> LIO (NodeState i o s)
+propagate ns@NodeState {cm, cluster, propStates, self} = do
+    let (peers, ps, cluster2) = C.actions cluster
+    $(logDebug) . pack $ "Cluster Actions: " ++ show (peers, ps)
+    mapM_ (doClusterAction ps) (Set.toList peers)
+    propStates2 <- mapM doPartitionActions (Map.toList propStates)
+    return ns {
+        cluster = cluster2,
+        propStates = Map.fromAscList [
+            (k, p)
+            | (k, p) <- propStates2
+            , p /= P.initProp self (P.getPowerState p)
+          ]
+      }
+  where
+    doClusterAction ps peer =
+      send cm peer (ClusterMerge ps)
+
+    doPartitionActions (key, propState) = do
+        let (peers, ps, propState2) = P.actions propState
+        mapM_ (perform ps) (Set.toList peers)
+        return (key, propState2)
+      where
+        perform ps peer =
+          send cm peer (PartitionMerge key ps)
 
 
-{- |
-  This `Sink` is what actually handles all peer messages and user input.
--}
-requestSink :: (Binary response, Binary request)
-  => Legionary request response
-  -> NodeState response
-  -> Sink (Message request response) IO ()
-requestSink l nodeState = do
-    logNodeState nodeState
-    nodeState2@NodeState {forwarded, cluster}
-      <- lift $ rebalance l nodeState
-    msg <- await
-    debugM ("Receiving: " ++ show msg)
+{- | Handle one incomming message.  -}
+handleMessage :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> NodeState i o s
+  -> Message i o s
+  -> LIO (NodeState i o s)
+
+handleMessage l nodeState@NodeState {cm, forwarded, cluster} msg = do
+    $(logDebug) . pack $ "Receiving: " ++ show msg
     case msg of
-      Just (P peerMsg@PeerMessage {source}) ->
-        known cluster source >>= bool
-          (do
-            warningM ("Dropping message from unknown peer: " ++ show source)
-            requestSink l nodeState2
-          ) (do
-            newNodeState <- lift $ handlePeerMessage l nodeState2 peerMsg
-            requestSink l newNodeState
-          )
-      Just (R ((key, request), respond)) -> do
-        dist <- liftIO $ distribution cluster
-        debugM ("Routing against: " ++ show dist)
-        case toDescList (findPartition key dist) of
-          [] -> do
-            errorM
+      P peerMsg@PeerMessage {source} ->
+        if known source
+          then handlePeerMessage l nodeState peerMsg
+          else do
+            $(logWarn) . pack
+              $ "Dropping message from unknown peer: " ++ show source
+            return nodeState
+      R ((key, request), respond) ->
+        case minView (C.findPartition key cluster) of
+          Nothing -> do
+            $(logError) . pack
               $ "Keyspace does not contain key: " ++ show key ++ ". This "
               ++ "is a very bad thing and probably means there is a bug, "
               ++ "or else this node has not joined a cluster yet."
-            requestSink l nodeState2
-          peer:_ -> do
-            mid <- lift $
-              send cluster peer (ForwardRequest key (encode request))
-            requestSink l nodeState2 {forwarded = insert mid respond forwarded}
-      Just (J m) ->
-        lift (handleJoinRequest nodeState2 m) >>= requestSink l
-        
-      Nothing ->
-        return ()
+            return nodeState
+          Just (peer, _) -> do
+            mid <- send cm peer (ForwardRequest key request)
+            return nodeState {
+                forwarded = F . insert mid (lift . respond) . unF $ forwarded
+              }
+      J m -> handleJoinRequest nodeState m
   where
     {- |
       Return `True` if the peer is a known peer, false otherwise.
     -}
-    known cluster peer = liftIO $ (peer `Map.member`) <$> peers cluster
+    known peer = peer `member` C.allParticipants cluster
 
 
-{- |
-  Handle a join request message
--}
+{- | Handle a join request message -}
 handleJoinRequest
-  :: NodeState response
-  -> (JoinRequest, JoinResponse -> IO ())
-  -> IO (NodeState response)
+  :: NodeState i o s
+  -> (JoinRequest, JoinResponse -> LIO ())
+  -> LIO (NodeState i o s)
+
 handleJoinRequest
-    ns@NodeState {cluster}
+    ns@NodeState {cluster, cm}
     (JoinRequest peerAddr, respond)
   = do
-    peerCS <- requestJoin cluster (getAddr peerAddr)
-    respond (JoinOk peerCS)
-    return ns
-
-handleJoinRequest
-    ns@NodeState {cluster}
-    (RejoinRequest otherCS, respond)
-  = do
-    result <- requestRejoin cluster otherCS
-    case result of
-      Left err -> respond (JoinRejected err)
-      Right newCS -> respond (JoinOk newCS)
-    return ns
+    peer <- getUUID
+    let newCluster = C.joinCluster peer peerAddr cluster
+    newPeers cm (getPeers newCluster)
+    respond (JoinOk peer (C.getPowerState newCluster))
+    return ns {cluster = newCluster}
 
 
 {- |
   Figure out if any rebalancing actions must be taken by this node, and kick
   them off if so.
 -}
-rebalance
-  :: Legionary request response
-  -> NodeState response
-  -> IO (NodeState response)
--- don't start a handoff if there is one already in progress.
-rebalance _ ns@NodeState {handoff = Just _} = return ns
-rebalance l ns@NodeState {cluster} = do
-    dist <- distribution cluster
-    let action = rebalanceAction (self cluster) dist
-    debugM ("The rebalancing action is: " ++ show action)
-    case action of
-      Nothing -> return ns
-      Just (Move targetPeer replica keys) -> do
-        allKeys <- 
-          listKeys (persistence l) $= CL.filter (`KD.member` keys) $$ CL.consume
-        messageIds <- mapM (sendState (persistence l) targetPeer) allKeys
-        case messageIds of 
-          [] -> do
-            -- There weren't actually any keys to migrate, so short
-            -- circuit the handoff.
-            claim cluster targetPeer (singleton replica keys)
-            return ns
-          _ ->
-            return ns {
-                handoff = Just HandoffState {
-                    expectedAcks = fromList messageIds,
-                    handoffReplica = replica,
-                    handoffRange = keys,
-                    targetPeer
-                  }
-              }
+rebalance :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> NodeState i o s
+  -> LIO (NodeState i o s)
+
+rebalance _ ns@NodeState {self, cluster} = do
+    let action = rebalanceAction self allPeers dist
+    $(logDebug) . pack $ "The rebalance action is: " ++ show action
+    return ns {
+        cluster = case action of
+          Nothing -> cluster
+          Just (Invite ks) -> claimParticipation self ks cluster
+      }
   where
-    sendState persist peer key = do
-      state <- getState persist key
-      send cluster peer (StoreState key state)
+    allPeers = (Set.fromList . Map.keys . getPeers) cluster
+    dist = getDistribution cluster
 
 
-{- |
-  This defines the various ways a node can be spun up.
--}
+{- | This defines the various ways a node can be spun up.  -}
 data StartupMode
   = NewCluster
     -- ^ Indicates that we should bootstrap a new cluster at startup. The
@@ -848,36 +934,60 @@ data StartupMode
   deriving (Show, Eq)
 
 
-{- |
-  The different types of messages handled by this process.
--}
-data Message request response
-  = P PeerMessage
-  | R (RequestMsg request response)
-  | J (JoinRequest, JoinResponse -> IO ())
+{- | The different types of messages handled by this process.  -}
+data Message i o s
+  = P (PeerMessage i o s)
+  | R (RequestMsg i o)
+  | J (JoinRequest, JoinResponse -> LIO ())
 
-instance Show (Message request response) where
+instance (Show i, Show o, Show s) => Show (Message i o s) where
   show (P m) = "(P " ++ show m ++ ")"
   show (R ((p, _), _)) = "(R ((" ++ show p ++ ", _), _))"
   show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
 
 
-{- |
-  Shorthand logging.
--}
-errorM :: (MonadIO io) => String -> io ()
-errorM = liftIO . L.errorM "legion"
+{- | A helper function to log the state of the node: -}
+logNodeState :: (LegionConstraints i o s) => NodeState i o s -> LIO ()
+logNodeState ns = $(logDebug) . pack
+    $ "The current node state is: " ++ show ns
 
 
-{- |
-  A helper function to log the state of the node:
--}
-logNodeState :: (MonadIO io) => NodeState response -> io ()
-logNodeState ns@NodeState {cluster} = liftIO $ do
-  debugM $ "The current node state is: " ++ show ns
-  cs <- current cluster
-  dist <- distribution cluster
-  debugM $ "The current cluster state is: " ++ show cs
-  debugM $ "The current distribution state is: " ++ show dist
+{- | A utility function that makes a UUID, no matter what.  -}
+getUUID :: (MonadIO io) => io UUID
+
+getUUID = liftIO nextUUID >>= maybe (wait >> getUUID) return
+  where
+    wait = liftIO (threadDelay oneMillisecond)
+    oneMillisecond = 1000
+
+
+{- | Like `getState`, but in LIO, and provides the correct bottom value.  -}
+getStateL :: (ApplyDelta i s, Bottom s)
+  => Persistence i s
+  -> Peer
+  -> ClusterPropState
+  -> PartitionKey
+  -> LIO (PartitionPropState i s)
+
+getStateL p self cluster key =
+  {- dp == default participants -}
+  let dp = C.findPartition key cluster
+  in maybe
+      (P.new key self dp)
+      (P.initProp self)
+      <$> lift (getState p key)
+
+
+{- | Like `saveState`, but in LIO.  -}
+saveStateL
+  :: Persistence i s
+  -> PartitionKey
+  -> Maybe (PartitionPowerState i s) -> LIO ()
+saveStateL p k = lift . saveState p k
+
+
+{- | Like `list`, but in LIO.  -}
+listL :: Persistence i s -> Source LIO (PartitionKey, PartitionPowerState i s)
+listL p = transPipe lift (list p)
 
 
