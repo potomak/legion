@@ -73,6 +73,7 @@ import Data.Time.Clock (getCurrentTime)
 import Data.UUID (UUID)
 import Data.UUID.V1 (nextUUID)
 import GHC.Generics (Generic)
+import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart))
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.Bottom (Bottom, bottom)
 import Network.Legion.ClusterState (ClusterPowerState, claimParticipation,
@@ -98,6 +99,7 @@ import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   defaultProtocol, listen, setSocketOption, socket, SockAddr(SockAddrInet,
   SockAddrInet6, SockAddrUnix, SockAddrCan), connect, getPeerName, Socket)
 import Network.Socket.ByteString.Lazy (sendAll)
+import Network.Wai.Handler.Warp (HostPreference, Port)
 import System.Directory (removeFile, doesFileExist, getDirectoryContents)
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
@@ -155,7 +157,7 @@ runLegionary :: (LegionConstraints i o s)
 
 runLegionary
     legionary
-    settings@LegionarySettings {}
+    settings@LegionarySettings {adminHost, adminPort}
     startupMode
     requestSource
   = do
@@ -163,8 +165,9 @@ runLegionary
     nodeState <- makeNodeState settings startupMode
     $(logInfo) . pack
       $ "The initial node state is: " ++ show nodeState
+    adminS <- loggingC =<< runAdmin adminPort adminHost
     joinS <- loggingC (joinMsgSource settings)
-    (joinS `merge` (peerS `merge` requestSource))
+    (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
       =$= CL.map toMessage
       $$  requestSink settings legionary nodeState
   where
@@ -172,11 +175,14 @@ runLegionary
     toMessage
       :: Either
           (JoinRequest, JoinResponse -> LIO ())
-          (Either (PeerMessage i o s) (RequestMsg i o))
+          (Either
+            (PeerMessage i o s)
+            (Either (RequestMsg i o) (AdminMessage i o s)))
       -> Message i o s
     toMessage (Left m) = J m
     toMessage (Right (Left m)) = P m
-    toMessage (Right (Right m)) = R m
+    toMessage (Right (Right (Left m))) = R m
+    toMessage (Right (Right (Right m))) = A m
 
     {- |
       Turn an LIO-based conduit into an IO-based conduit, so that it
@@ -331,10 +337,18 @@ data LegionarySettings = LegionarySettings {
         The address on which the legion framework will listen for
         rebalancing and cluster management commands.
       -}
-    joinBindAddr :: SockAddr
+    joinBindAddr :: SockAddr,
       {- ^
         The address on which the legion framework will listen for cluster
         join requests.
+      -}
+    adminHost :: HostPreference,
+      {- ^
+        The host address on which the admin service should run.
+      -}
+    adminPort :: Port
+      {- ^
+        The host port on which the admin service should run.
       -}
   }
 
@@ -846,11 +860,28 @@ handleMessage l nodeState@NodeState {cm, forwarded, cluster} msg = do
                 forwarded = F . insert mid (lift . respond) . unF $ forwarded
               }
       J m -> handleJoinRequest nodeState m
+      A m -> handleAdminMessage l nodeState m
   where
     {- |
       Return `True` if the peer is a known peer, false otherwise.
     -}
     known peer = peer `member` C.allParticipants cluster
+
+
+{- |
+  Handle a message from the admin service.
+-}
+handleAdminMessage
+  :: Legionary i o s
+  -> NodeState i o s
+  -> AdminMessage i o s
+  -> LIO (NodeState i o s)
+handleAdminMessage _ ns (GetState respond) =
+  respond ns >> return ns
+handleAdminMessage Legionary {persistence} ns (GetPart key respond) = do
+  partitionVal <- lift (getState persistence key)
+  respond partitionVal
+  return ns
 
 
 {- | Handle a join request message -}
@@ -913,11 +944,13 @@ data Message i o s
   = P (PeerMessage i o s)
   | R (RequestMsg i o)
   | J (JoinRequest, JoinResponse -> LIO ())
+  | A (AdminMessage i o s)
 
 instance (Show i, Show o, Show s) => Show (Message i o s) where
   show (P m) = "(P " ++ show m ++ ")"
   show (R ((p, _), _)) = "(R ((" ++ show p ++ ", _), _))"
   show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
+  show (A a) = "(A (" ++ show a ++ "))"
 
 
 {- | A helper function to log the state of the node: -}
