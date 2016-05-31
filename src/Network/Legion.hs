@@ -339,11 +339,15 @@ type RequestMsg i o = ((PartitionKey, i), o -> IO ())
 {- | Settings used when starting up the legion framework.  -}
 data LegionarySettings = LegionarySettings {
     peerBindAddr :: SockAddr,
-      -- ^ The address on which the legion framework will listen for
-      --   rebalancing and cluster management commands.
+      {- ^
+        The address on which the legion framework will listen for
+        rebalancing and cluster management commands.
+      -}
     joinBindAddr :: SockAddr
-      -- ^ The address on which the legion framework will listen for
-      --   cluster join requests.
+      {- ^
+        The address on which the legion framework will listen for cluster
+        join requests.
+      -}
   }
 
 
