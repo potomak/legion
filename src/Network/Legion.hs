@@ -82,6 +82,7 @@ import Network.Legion.ConnectionManager (PeerMessage(PeerMessage,
   source, messageId, payload), PeerMessagePayload(PartitionMerge,
   ForwardRequest, ForwardResponse, ClusterMerge), send, forward, newPeers,
   newConnectionManager)
+import Network.Legion.Constraints (LegionConstraints)
 import Network.Legion.Distribution (Peer, rebalanceAction,
   RebalanceAction(Invite))
 import Network.Legion.Fork (forkC)
@@ -265,21 +266,6 @@ makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
 --
 -- See `newMemoryPersistence` and `diskPersistence` if you need to get
 -- started quickly with an in-memory persistence layer.
-
-
-{- |
-  This is a more convenient way to write the somewhat unwieldy set of
-  constraints
-   
-  > (
-  >   ApplyDelta i s, Bottom s, Binary i, Binary o, Binary s, Show i,
-  >   Show o, Show s, Eq i
-  > )
--}
-class (
-    ApplyDelta i s, Bottom s, Binary i, Binary o, Binary s, Show i,
-    Show o, Show s, Eq i
-  ) => LegionConstraints i o s where
 
 
 {- |

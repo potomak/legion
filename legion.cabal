@@ -30,6 +30,7 @@ library
     Network.Legion.ClusterState
     Network.Legion.Conduit
     Network.Legion.ConnectionManager
+    Network.Legion.Constraints
     Network.Legion.Distribution
     Network.Legion.Fork
     Network.Legion.KeySet
