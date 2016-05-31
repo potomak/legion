@@ -34,6 +34,7 @@ library
     Network.Legion.Fork
     Network.Legion.KeySet
     Network.Legion.LIO
+    Network.Legion.NodeState
     Network.Legion.PartitionKey
     Network.Legion.PartitionState
     Network.Legion.PowerState

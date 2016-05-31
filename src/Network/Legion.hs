@@ -78,15 +78,17 @@ import Network.Legion.Bottom (Bottom, bottom)
 import Network.Legion.ClusterState (ClusterPowerState, claimParticipation,
   ClusterPropState, getPeers, getDistribution)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
-import Network.Legion.ConnectionManager (ConnectionManager,
-  PeerMessage(PeerMessage, source, messageId, payload),
-  PeerMessagePayload(PartitionMerge, ForwardRequest, ForwardResponse,
-  ClusterMerge), MessageId, send, forward, newPeers, newConnectionManager)
+import Network.Legion.ConnectionManager (PeerMessage(PeerMessage,
+  source, messageId, payload), PeerMessagePayload(PartitionMerge,
+  ForwardRequest, ForwardResponse, ClusterMerge), send, forward, newPeers,
+  newConnectionManager)
 import Network.Legion.Distribution (Peer, rebalanceAction,
   RebalanceAction(Invite))
 import Network.Legion.Fork (forkC)
-import Network.Legion.KeySet (union, KeySet)
+import Network.Legion.KeySet (union)
 import Network.Legion.LIO (LIO)
+import Network.Legion.NodeState (NodeState(NodeState), self, cm, cluster,
+  forwarded, propStates, migration, Forwarded(F), unF)
 import Network.Legion.PartitionKey (PartitionKey(K, unkey), toHex, fromHex)
 import Network.Legion.PartitionState(PartitionPowerState, PartitionPropState)
 import Network.Legion.PowerState (ApplyDelta(apply))
@@ -577,24 +579,6 @@ handlePeerMessage -- ClusterMerge
             migration = migration `union` newMigration,
             cluster = newCluster
           }
-
-
-{- | Defines the local state of a node in the cluster.  -}
-data NodeState i o s = NodeState {
-             self :: Peer,
-               cm :: ConnectionManager i o s,
-          cluster :: ClusterPropState,
-        forwarded :: Forwarded o,
-       propStates :: Map PartitionKey (PartitionPropState i s),
-        migration :: KeySet
-  }
-  deriving (Show)
-
-
-{- | A set of forwardmed messages.  -}
-newtype Forwarded o = F {unF :: Map MessageId (o -> LIO ())}
-instance Show (Forwarded o) where
-  show = show . Map.keys . unF
 
 
 {- | This is the type of a join request message.  -}
