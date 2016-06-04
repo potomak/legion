@@ -53,8 +53,8 @@ data Legionary i o s = Legionary {
 
 {- |
   The type of a user-defined persistence strategy used to persist
-  partition states. See `newMemoryPersistence` or `diskPersistence`
-  if you need to get started quicky.
+  partition states. See 'Network.Legion.newMemoryPersistence' or
+  'Network.Legion.diskPersistence' if you need to get started quicky.
 -}
 data Persistence i s = Persistence {
      getState :: PartitionKey -> IO (Maybe (PartitionPowerState i s)),
@@ -76,8 +76,9 @@ data Persistence i s = Persistence {
   response to some interested party.
 
   Unless you know exactly what you are doing, you will have used
-  `forkLegionary` instead of `runLegionary` to run the framework, in
-  which case you can safely ignore the existence of this type.
+  'Network.Legion.forkLegionary' instead of 'Network.Legion.runLegionary'
+  to run the framework, in which case you can safely ignore the existence
+  of this type.
 -}
 type RequestMsg i o = ((PartitionKey, i), o -> IO ())
 
