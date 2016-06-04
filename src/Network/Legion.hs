@@ -53,7 +53,7 @@ import Control.Monad (void, forever, join, (>=>))
 import Control.Monad.Catch (catchAll, try, SomeException, throwM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (logDebug, logWarn, logError, logInfo,
-  MonadLoggerIO, runLoggingT, askLoggerIO)
+  MonadLoggerIO, runLoggingT, askLoggerIO, LoggingT)
 import Control.Monad.Trans.Class (lift)
 import Data.Binary (Binary, encode, decode)
 import Data.Bool (bool)
@@ -153,7 +153,11 @@ runLegionary :: (LegionConstraints i o s)
   -> StartupMode
   -> Source IO (RequestMsg i o)
     -- ^ A source of requests, together with a way to respond to the requets.
-  -> LIO ()
+    {-
+      We dodn't use `LIO` in the type signature here because we don't
+      export the `LIO` symbol.
+    -}
+  -> LoggingT IO ()
 
 runLegionary
     legionary
