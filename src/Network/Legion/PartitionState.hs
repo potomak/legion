@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {- |
   This module contains types related to the partition state.
 -}
@@ -18,12 +19,10 @@ module Network.Legion.PartitionState (
   projParticipants,
 ) where
 
-import Prelude hiding (lookup, take)
-
 import Data.Binary (Binary)
+import Data.Default.Class (Default)
 import Data.Set (Set)
 import Data.Time.Clock (UTCTime)
-import Network.Legion.Bottom (Bottom)
 import Network.Legion.Distribution (Peer)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PowerState (ApplyDelta)
@@ -31,8 +30,15 @@ import Network.Legion.Propagation (PropState, PropPowerState)
 import qualified Network.Legion.Propagation as P
 
 {- |
-  This is the power state of the partition state, representing all possible
-  future value of the partition state.
+  This is an opaque representation of your application's partition state.
+  Internally, this represents the complete, nondeterministic set of states the
+  partition can be in as a result of concurrency, eventual consistency, and all
+  the other distributed systems reasons your partition state might have more
+  than one value.
+
+  You can save can save these guys to disk in your
+  `Network.Legion.Persistence` layer by using its `Binary`
+  instance.
 -}
 newtype PartitionPowerState i s = PartitionPowerState {
     unPowerState :: PropPowerState PartitionKey s Peer i
@@ -88,9 +94,9 @@ actions prop =
 
 
 {- |
-  Create a new, bottom, PartitionPropState.
+  Create a new, default, PartitionPropState.
 -}
-new :: (Bottom s)
+new :: (Default s)
   => PartitionKey
     {- ^ The power state origin, which is the partition key. -}
   -> Peer

@@ -1,5 +1,6 @@
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {- |
   This module defines how to propagate a PowerState amoung its participants.
 -}
@@ -27,12 +28,12 @@ module Network.Legion.Propagation (
 import Prelude hiding (lookup)
 
 import Data.Binary (Binary)
+import Data.Default.Class (Default)
 import Data.Map (Map, lookup)
 import Data.Maybe (fromMaybe)
 import Data.Set (member, Set)
 import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format () -- For `instance Show UTCTime`
-import Network.Legion.Bottom (Bottom)
 import Network.Legion.PowerState (PowerState, divergent, ApplyDelta,
   acknowledge, projectedValue, StateId)
 import qualified Data.Map as Map
@@ -124,7 +125,7 @@ data PeerStatus
 {- |
   Create a new propagation state.
 -}
-new :: (Bottom s) => o -> p -> Set p -> PropState o s p d 
+new :: (Default s) => o -> p -> Set p -> PropState o s p d 
 new origin self participants =
   PropState {
       powerState = PS.new origin participants,

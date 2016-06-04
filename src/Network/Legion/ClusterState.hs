@@ -1,7 +1,7 @@
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {- |
   This module contains the data types related to the distributed cluster state.
 -}
@@ -24,14 +24,14 @@ module Network.Legion.ClusterState (
 ) where
 
 import Data.Binary (Binary)
+import Data.Default.Class (Default(def))
 import Data.Map (Map)
 import Data.Set (Set)
 import Data.Time.Clock (UTCTime)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
-import Network.Legion.Bottom (Bottom(bottom))
-import Network.Legion.Distribution (ParticipationDefaults, Peer, modify)
+import Network.Legion.Distribution (ParticipationDefaults, modify, Peer)
 import Network.Legion.KeySet (KeySet, full, unions)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PowerState (ApplyDelta(apply))
@@ -53,8 +53,8 @@ data ClusterState = ClusterState {
   }
   deriving (Show, Generic)
 instance Binary ClusterState
-instance Bottom ClusterState where
-  bottom = ClusterState {
+instance Default ClusterState where
+  def = ClusterState {
       distribution = D.empty,
              peers = Map.empty
     }

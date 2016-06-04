@@ -4,7 +4,7 @@
 module Network.Legion.Conduit (
   chanToSource,
   chanToSink,
-  merge
+  merge,
 ) where
 
 import Control.Concurrent (forkIO)

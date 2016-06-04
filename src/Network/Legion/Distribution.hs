@@ -1,5 +1,5 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {- |
   This module defines the data structures and functions used for handling the
   key space distribution.
@@ -11,7 +11,8 @@ module Network.Legion.Distribution (
   modify,
   findPartition,
   rebalanceAction,
-  RebalanceAction(..)
+  RebalanceAction(..),
+  newPeer,
 ) where
 
 import Prelude hiding (null)
@@ -23,9 +24,17 @@ import Data.Set (Set, toList)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
 import Network.Legion.KeySet (KeySet, member, (\\), null)
+import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
-import qualified Data.Set as Set (empty, size, (\\), member)
-import qualified Network.Legion.KeySet as KS (size)
+import Network.Legion.UUID (getUUID)
+import qualified Data.Set as Set
+import qualified Network.Legion.KeySet as KS
+
+
+{- |
+  The way to identify a peer.
+-}
+newtype Peer = Peer UUID deriving (Show, Binary, Eq, Ord)
 
 
 {- |
@@ -82,12 +91,6 @@ modify fun keyset =
          remaining = ks \\ affected;
       } in
       (unaffected, ps):(affected, fun ps):doModify remaining dist
-
-
-{- |
-  The way to identify a peer.
--}
-type Peer = UUID
 
 
 {- |
@@ -168,6 +171,13 @@ data RebalanceAction
   = Invite KeySet
   deriving (Show, Generic)
 instance Binary RebalanceAction
+
+
+{- |
+  Create a new peer.
+-}
+newPeer :: LIO Peer
+newPeer = Peer <$> getUUID
 
 
 -- {- |

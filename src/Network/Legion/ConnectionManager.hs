@@ -1,44 +1,32 @@
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TemplateHaskell #-}
 {- |
   This module manages connections to other nodes in the cluster.
 -}
 module Network.Legion.ConnectionManager (
   ConnectionManager,
-  PeerMessage(..),
-  PeerMessagePayload(..),
-  MessageId,
   newConnectionManager,
   send,
-  forward,
-  newPeer,
-  newPeers
+  newPeers,
 ) where
 
 import Prelude hiding (lookup)
 
-import Control.Concurrent (Chan, writeChan, newChan, readChan,
-  newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Concurrent (Chan, writeChan, newChan, readChan)
 import Control.Exception (try, SomeException)
 import Control.Monad (void)
-import Control.Monad.Logger (logInfo, logWarn, logDebug)
+import Control.Monad.Logger (logInfo, logWarn)
 import Control.Monad.Trans.Class (lift)
 import Data.Binary (Binary, encode)
 import Data.ByteString.Lazy (ByteString)
 import Data.Map (toList, insert, empty, Map, lookup)
 import Data.Text (pack)
-import Data.UUID (UUID)
-import Data.UUID.V1 (nextUUID)
-import Data.Word (Word64)
-import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
-import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Distribution (Peer)
 import Network.Legion.Fork (forkC)
 import Network.Legion.LIO (LIO)
-import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PartitionState (PartitionPowerState)
+import Network.Legion.StateMachine (PeerMessage)
 import Network.Socket (SockAddr, Socket, socket, SocketType(Stream),
   defaultProtocol, connect, close, SockAddr(SockAddrInet, SockAddrInet6,
   SockAddrUnix, SockAddrCan), Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN))
@@ -56,16 +44,14 @@ instance Show (ConnectionManager i o s) where
   Create a new connection manager.
 -}
 newConnectionManager :: (Binary i, Binary o, Binary s)
-  => Peer
-  -> Map Peer SockAddr
+  => Map Peer BSockAddr
   -> LIO (ConnectionManager i o s)
-newConnectionManager self initPeers = do
-    nextId <- newSequence
+newConnectionManager initPeers = do
     chan <- lift newChan
     forkC "connection manager thread" $
-      manager chan S {nextId, connections = empty}
+      manager chan S {connections = empty}
     let cm = C chan
-    mapM_ ((uncurry . newPeer) cm) (toList initPeers)
+    newPeers cm initPeers
     return cm
   where
     manager :: (Binary s, Binary o, Binary i)
@@ -78,19 +64,6 @@ newConnectionManager self initPeers = do
       => State i o s
       -> Message i o s
       -> LIO (State i o s)
-    handle s@S {nextId, connections} (Send peer payload respond) =
-      case lookup peer connections of
-        Nothing ->
-          error ("unknown peer: " ++ show peer)
-        Just conn -> do
-          respond nextId
-          lift $ writeChan conn PeerMessage {
-              source = self,
-              messageId = nextId,
-              payload
-            }
-          return s {nextId = next nextId}
-
     handle s@S {connections} (NewPeer peer addr) =
       case lookup peer connections of
         Nothing -> do
@@ -101,7 +74,7 @@ newConnectionManager self initPeers = do
         Just _ ->
           return s
 
-    handle s@S {connections} (Forward peer msg) = do
+    handle s@S {connections} (Send peer msg) = do
       case lookup peer connections of
         Nothing -> $(logWarn) . pack $ "unknown peer: " ++ show peer
         Just conn -> lift $ writeChan conn msg
@@ -177,33 +150,14 @@ connection addr = do
 
 
 {- |
-  Send a message to a peer. Returns the id of the message that was sent.
+  Send a message to a peer.
 -}
-send :: (Show i, Show o, Show s)
-  => ConnectionManager i o s
-  -> Peer
-  -> PeerMessagePayload i o s
-  -> LIO MessageId
-send (C chan) peer msg = do
-  mid <- lift $ do
-    mvar <- newEmptyMVar
-    writeChan chan (Send peer msg (lift . putMVar mvar))
-    takeMVar mvar
-  $(logDebug) . pack
-    $ "Sent " ++ show msg ++ " to peer: " ++ show peer
-    ++ "with messageId: " ++ show mid
-  return mid
-
-
-{- |
-  Forward a pre-built message to a peer.
--}
-forward
+send
   :: ConnectionManager i o s
   -> Peer
   -> PeerMessage i o s
   -> LIO ()
-forward (C chan) peer = lift . writeChan chan . Forward peer
+send (C chan) peer = lift . writeChan chan . Send peer
 
 
 {- |
@@ -231,47 +185,16 @@ newPeers cm peers =
   The internal state of the connection manager.
 -}
 data State i o s = S {
-    nextId :: MessageId,
     connections :: Map Peer (Chan (PeerMessage i o s))
   }
-
-
-{- |
-  The type of messages sent to us from other peers.
--}
-data PeerMessage i o s = PeerMessage {
-    source :: Peer,
-    messageId :: MessageId,
-    payload :: PeerMessagePayload i o s
-  }
-  deriving (Generic, Show)
-instance (Binary i, Binary o, Binary s) => Binary (PeerMessage i o s)
-
-
-{- |
-  The data contained within a peer message.
-
-  When we get around to implementing durability and data replication,
-  the sustained inability to confirm that a node has received one of
-  these messages should result in the ejection of that node from the
-  cluster and the blacklisting of that node so that it can never re-join.
--}
-data PeerMessagePayload i o s
-  = PartitionMerge PartitionKey (PartitionPowerState i s)
-  | ForwardRequest PartitionKey i
-  | ForwardResponse MessageId o
-  | ClusterMerge ClusterPowerState
-  deriving (Generic, Show)
-instance (Binary i, Binary o, Binary s) => Binary (PeerMessagePayload i o s)
 
 
 {- |
   The types of messages that the ConnectionManager understands.
 -}
 data Message i o s
-  = Send Peer (PeerMessagePayload i o s) (MessageId -> LIO ())
-  | NewPeer Peer SockAddr
-  | Forward Peer (PeerMessage i o s)
+  = NewPeer Peer SockAddr
+  | Send Peer (PeerMessage i o s)
 
 
 {- |
@@ -282,36 +205,5 @@ fam SockAddrInet {} = AF_INET
 fam SockAddrInet6 {} = AF_INET6
 fam SockAddrUnix {} = AF_UNIX
 fam SockAddrCan {} = AF_CAN
-
-
-{- |
-  Initialize a new sequence of messageIds
--}
-newSequence ::  LIO MessageId
-newSequence = lift $ do
-  sid <- getUUID
-  return (M sid 0)
-
-
-{- |
-  Make a UUID, no matter what.
--}
-getUUID :: IO UUID
-getUUID = nextUUID >>= maybe (wait >> getUUID) return
-  where
-    wait = threadDelay oneMillisecond
-    oneMillisecond = 1000
-
-
-{- |
-  Generate the next message id in the sequence. We would use `succ`, but making
-  `MessageId` an  instance of `Enum` really isn't appropriate.
--}
-next :: MessageId -> MessageId
-next (M sequenceId ord) = M sequenceId (ord + 1)
-
-
-data MessageId = M UUID Word64 deriving (Generic, Show, Eq, Ord)
-instance Binary MessageId
 
 

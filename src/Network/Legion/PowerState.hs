@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {- |
   This module contains the fundamental distributed data object.
 -}
@@ -23,19 +22,19 @@ module Network.Legion.PowerState (
   projParticipants,
   divergent,
   divergences,
-  delta
+  delta,
 ) where
 
 import Prelude hiding (null)
 
 import Data.Binary (Binary(put, get))
+import Data.Default.Class (Default(def))
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
 import Data.Map (Map, filterWithKey, unionWith, minViewWithKey, keys,
   toDescList, toAscList, fromAscList)
 import Data.Set (Set, union, (\\), null, member)
 import Data.Word (Word64)
 import GHC.Generics (Generic)
-import Network.Legion.Bottom (Bottom(bottom))
 import qualified Data.Map as Map (insert, empty)
 import qualified Data.Set as Set (insert, empty, delete)
 
@@ -90,8 +89,8 @@ instance (Binary p) => Binary (StateId p) where
     return $ case theThing of
       Nothing -> BottomSid
       Just (a, b, c, d, p) -> Sid (Word256 (Word128 a b) (Word128 c d)) p
-instance Bottom (StateId p) where
-  bottom = BottomSid
+instance Default (StateId p) where
+  def = BottomSid
 
 
 {- |
@@ -108,24 +107,24 @@ instance (Binary p, Binary d) => Binary (Delta p d)
 {- |
   The class which allows for delta application.
 -}
-class ApplyDelta d s where
+class ApplyDelta i s where
   {- |
     Apply a delta to a state value. *This function MUST be total!!!*
   -}
-  apply :: d -> s -> s
+  apply :: i -> s -> s
 
 
 {- |
   Construct a new PowerState with the given origin and initial participants
 -}
-new :: (Bottom s) => o -> Set p -> PowerState o s p d
+new :: (Default s) => o -> Set p -> PowerState o s p d
 new origin participants =
   PowerState {
       origin,
       infimum = Infimum {
-          stateId = bottom,
+          stateId = def,
           participants,
-          stateValue = bottom
+          stateValue = def
         },
       deltas = Map.empty
     }

@@ -1,10 +1,10 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
   This module contains the admin interface code.
 -}
 module Network.Legion.Admin (
   runAdmin,
-  AdminMessage(..)
 ) where
 
 import Control.Concurrent (forkIO, newChan, newEmptyMVar, writeChan,
@@ -15,12 +15,11 @@ import Control.Monad.Trans.Class (lift)
 import Data.Conduit (Source)
 import Data.Default.Class (def)
 import Data.Text.Lazy (Text, pack)
+import Network.Legion.Application (LegionConstraints)
 import Network.Legion.Conduit (chanToSource)
-import Network.Legion.Constraints (LegionConstraints)
 import Network.Legion.LIO (LIO)
-import Network.Legion.NodeState (NodeState)
 import Network.Legion.PartitionKey (PartitionKey(K))
-import Network.Legion.PartitionState (PartitionPowerState)
+import Network.Legion.StateMachine (AdminMessage(GetState, GetPart))
 import Network.Wai.Handler.Warp (HostPreference, defaultSettings, Port,
   setHost, setPort)
 import Web.Scotty.Resource.Trans (resource, get)
@@ -73,16 +72,5 @@ options port host = def {
       . setHost host
       $ defaultSettings
   }
-
-
-{- |
-  The type of messages sent by the admin service.
--}
-data AdminMessage i o s
-  = GetState (NodeState i o s -> LIO ())
-  | GetPart PartitionKey (Maybe (PartitionPowerState i s) -> LIO ())
-instance Show (AdminMessage i o s) where
-  show (GetState _) = "(GetState _)"
-  show (GetPart k _) = "(GetPart " ++ show k ++ " _)"
 
 
