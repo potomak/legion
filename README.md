@@ -6,12 +6,6 @@
         - [Messaging](#messaging)
         - [General Scalability](#general-scalability)
 - [Development Status](#development-status)
-    - [TODO](#todo)
-        - [Connection Manager](#connection-manager)
-        - [Balancing algorithm](#balancing-algorithm)
-        - [Routing](#routing)
-        - [Missing Functionality](#missing-functionality)
-        - [Code Quality](#code-quality)
 
 
 Legion is a mathematically sound framework for writing horizontally
