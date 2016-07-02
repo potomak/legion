@@ -383,7 +383,7 @@ data LInput i o s
 
 instance (Show i, Show o, Show s) => Show (LInput i o s) where
   show (P m) = "(P " ++ show m ++ ")"
-  show (R ((p, _), _)) = "(R ((" ++ show p ++ ", _), _))"
+  show (R ((p, i), _)) = "(R ((" ++ show p ++ ", " ++ show i ++ "), _))"
   show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
   show (A a) = "(A (" ++ show a ++ "))"
 
