@@ -27,6 +27,7 @@ module Network.Legion.StateMachine (
 import Prelude hiding (lookup)
 
 import Control.Exception (throw)
+import Control.Monad (unless)
 import Control.Monad.Catch (try, SomeException, MonadCatch, MonadThrow)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (logDebug, logWarn, logError, logInfo,
@@ -35,7 +36,7 @@ import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.State (StateT, runStateT, get, put)
 import Data.Binary (Binary)
 import Data.Conduit (Source, Conduit, ($$), await, awaitForever,
-  transPipe, ConduitM, yield)
+  transPipe, ConduitM, yield, ($=))
 import Data.Default.Class (Default)
 import Data.Map (Map, insert, lookup)
 import Data.Maybe (fromMaybe)
@@ -59,6 +60,7 @@ import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState, PartitionPropState)
 import Network.Legion.PowerState (ApplyDelta)
 import Network.Legion.UUID (getUUID)
+import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Network.Legion.ClusterState as C
@@ -299,9 +301,13 @@ heartbeat = do
 -}
 migrate :: (LegionConstraints i o s) => Legionary i o s -> StateM i o s ()
 migrate Legionary{persistence} = do
-    ns <- getS
-    newNs <- lift $ listL persistence $$ accum ns {migration = KS.empty}
-    putS newNs
+    ns@NodeState {migration} <- getS
+    unless (KS.null migration) $
+      putS =<< lift (
+          listL persistence
+          $= CL.filter ((`KS.member` migration) . fst)
+          $$ accum ns {migration = KS.empty}
+        )
   where
     accum ns@NodeState {self, cluster, propStates} = await >>= \case
       Nothing -> return ns
