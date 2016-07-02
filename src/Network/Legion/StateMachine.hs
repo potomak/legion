@@ -164,7 +164,7 @@ handlePeerMessage -- ForwardRequest
         messageId
       }
   = do
-    NodeState {self, cluster} <- getS
+    ns@NodeState {self, cluster, propStates} <- getS
     let owners = C.findPartition key cluster
     if self `member` owners
       then do
@@ -186,6 +186,7 @@ handlePeerMessage -- ForwardRequest
             $(logDebug) . pack
               $ "Request details request: " ++ show prop ++ " ++ "
               ++ show request ++ " --> " ++ show (response, newProp)
+            putS ns {propStates = insert key newProp propStates}
             return response
           )
       else
