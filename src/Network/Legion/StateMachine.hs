@@ -3,6 +3,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {- |
@@ -147,6 +148,7 @@ handlePeerMessage -- PartitionMerge
           $ "Can't apply incomming partition action message "
           ++ show msg ++ "because of: " ++ show err
       Right newPropState -> do
+        $(logDebug) "Saving because of PartitionMerge"
         lift $ saveStateL persistence key (
             if P.participating newPropState
               then Just (P.getPowerState newPropState)
@@ -182,6 +184,7 @@ handlePeerMessage -- ForwardRequest
             prop <- lift $ getStateL persistence self cluster key
             let response = handleRequest key request (P.ask prop)
                 newProp = P.delta request prop
+            $(logDebug) "Saving because of ForwardRequest"
             lift $ saveStateL persistence key (Just (P.getPowerState newProp))
             $(logInfo) . pack
               $ "Handling user request: " ++ show request
@@ -317,6 +320,7 @@ migrate Legionary{persistence} = do
           newPeers_ = C.findPartition key cluster \\ P.projParticipants origProp
           newProp = foldr P.participate origProp (Set.toList newPeers_)
         in do
+          $(logDebug) . pack $ "Migrating: " ++ show key
           lift (saveStateL persistence key (Just (P.getPowerState newProp)))
           accum ns {
               propStates = Map.insert key newProp propStates
