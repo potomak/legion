@@ -1,13 +1,25 @@
 {- |
-  Legion is a framework designed to help people implement large-scale
-  distributed stateful services that scale horizontally using the
-  technique of data partitioning, sometimes known as "sharding". Examples
-  of services that rely on partitioning include ElasticSearch, Riak,
-  DynamoDB, and others.
+  Legion is a mathematically sound framework for writing horizontally
+  scalable user applications. Historically, horizontal scalability has
+  been achieved via the property of statelessness. Programmers would
+  design their applications to be free of any kind of persistent state,
+  avoiding the problem of distributed state management. This almost never
+  turns out to really be possible, so programmers achieve "statelessness"
+  by delegating application state management to some kind of external,
+  shared database -- which ends up having its own scalability problems.
 
-  In other words, this framework is an abstraction over partitioning,
-  replication, cluster-rebalancing, node discovery, and request routing;
-  allowing the user to focus on request logic and storage strategies.
+  In addition to scalability problems, which modern databases (especially
+  NoSQL databases) have done a good job of solving, there is another,
+  more fundamental problem facing these architectures: The application
+  is not really stateless.
+
+  Legion is a Haskell framework that abstracts state partitioning, data
+  replication, request routing, and cluster rebalancing, making it easy
+  to implement large and robust distributed data applications.
+
+  Examples of services that rely on partitioning include ElasticSearch,
+  Riak, DynamoDB, and others. In other words, almost all scalable
+  databases.
 -}
 
 module Network.Legion (
@@ -55,12 +67,12 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 -- $service-implementaiton
 -- Whenever you use Legion to develop a distributed application, your
 -- application is going to be divided into two major parts, the state/less/
--- part, and the state/ful/ part. The state/less/ part is going to be the
+-- part, and the state/ful/ part. The stateless part is going to be the
 -- context in which a legion node is running -- probably a web server if you
 -- are exposing your application as a web service. Legion itself is focused
--- mainly on the state/ful/ part, and it will do all the heavy lifting on
+-- mainly on the stateful part, and it will do all the heavy lifting on
 -- that side of things. However, it is worth mentioning a few things about
--- the state/less/ part before we move on.
+-- the stateless part before we move on.
 -- 
 -- The unit of state that Legion knows about is called a \"partition\". Each
 -- partition is identified by a 'PartitionKey', and it is replicated across
@@ -73,27 +85,24 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 -- your application is going to be responsible for
 -- 
 --   * Starting up the Legion runtime using 'forkLegionary'.
---   * Marshalling user requests into their equivalent stateful application
---     request (e.g. gathering data from a web requests).
 --   * Identifying the partition key to which a request should be applied
 --     (e.g.  maybe this is some component of a URL, or else an identifier
 --     stashed in a browser cookie).
---   * Submitting the stateful application request to the Legion runtime.
---   * Marshalling the Legion runtime response into something the user can
---     understand (e.g. constructing some kind of HTTP response).
+--   * Marshalling application requests into requests to the Legion runtime.
+--   * Marshalling the Legion runtime response into an application response.
 -- 
 -- Legion doesn't really address any of these things, mainly because there
--- are already plenty of great ways to write stateless services. What Legion
--- does provide is a runtime that can be embedded in the stateless part of
--- your application, that transparently handles all of the hard stateful
--- stuff, like replication, rebalancing, request routing, etc.
+-- are already plenty of great ways to write stateless services. What
+-- Legion does provide is a runtime that can be embedded in the stateless
+-- part of your application, that transparently handles all of the hard
+-- stateful stuff, like replication, rebalancing, request routing, etc.
 -- 
 -- The only thing required to implement a legion service is to
 -- provide a request handler and a persistence layer by constructing a
 -- 'Legionary' value and passing it to 'forkLegionary'. The stateful
 -- part of your application will live mostly within the request handler
--- 'handleRequest'. If you look at 'handleRequest', you will see that it
--- is abstract over the type variables @i@, @o@, and @s@.
+-- 'handleRequest'. If you look at 'handleRequest', you will see that
+-- it is abstract over the type variables @i@, @o@, and @s@.
 --
 -- > handleRequest :: PartitionKey -> i -> s -> o
 --
@@ -104,7 +113,7 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 -- which is the application state that each partition can assume.
 -- 
 -- Implementing a request handler is pretty straight forward, but
--- there is a little bit more to it that meets the eye. If you look at
+-- there is a little bit more to it than meets the eye. If you look at
 -- 'forkLegionary', you will see a constraint named @'LegionConstraints'
 -- i o s@, which is short-hand for a long list of typeclasses that
 -- your @i@, @o@, and @s@ types are going to have to implement. Of
@@ -127,15 +136,14 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 -- (TODO link to more info) but the TL;DR is that 'handleRequest' will
 -- only get called once for each input, but 'apply' has a very good
 -- chance of being called more than once for various reasons including
--- re-ordering the application of requests that were initially handled
--- "simultaneously" by two different nodes.
+-- re-playing the application of requests to resolve non-determinism.
 -- 
 -- Taking yet another look at 'handleRequest', you will see that it
 -- makes no provision for a non-existent partition state (i.e., it is
 -- written in terms of @s@, not @Maybe s@. Same goes for 'ApplyDelta').
 -- This framework takes the somewhat platonic philosophical view that all
 -- mathematical values exist somewhere and that there is no such thing as
--- non-existence partition. When you first spin up a Legion application,
+-- non-existent partition. When you first spin up a Legion application,
 -- all of those partitions are going to have a default value, which is
 -- 'Data.Default.Class.def' (Because your partition state must be an
 -- instance of the 'Data.Default.Class.Default' typeclass). This doesn't

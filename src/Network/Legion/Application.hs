@@ -40,7 +40,7 @@ data Legionary i o s = Legionary {
     {- |
       The request handler, implemented by the user to service requests.
 
-      Returns a response to the request, together with the new partitoin
+      Returns a response to the request, together with the new partition
       state.
     -}
     handleRequest :: PartitionKey -> i -> s -> o,
@@ -54,7 +54,7 @@ data Legionary i o s = Legionary {
 {- |
   The type of a user-defined persistence strategy used to persist
   partition states. See 'Network.Legion.newMemoryPersistence' or
-  'Network.Legion.diskPersistence' if you need to get started quicky.
+  'Network.Legion.diskPersistence' if you need to get started quickly.
 -}
 data Persistence i s = Persistence {
      getState :: PartitionKey -> IO (Maybe (PartitionPowerState i s)),

@@ -21,19 +21,15 @@ In addition to scalability problems, which modern databases (especially NoSQL
 databases) have done a good job of solving, there is another, more fundamental
 problem facing these architectures: The application is not really stateless.
 
-
-
 Legion is a Haskell framework that abstracts state partitioning, data
 replication, request routing, and cluster rebalancing, making it easy
 to implement large and robust distributed data applications.
 
+Examples of services that rely on partitioning include ElasticSearch,
+Riak, DynamoDB, and others. In other words, almost all scalable databases.
 
 Check out https://github.com/taphu/legion-cache for a simple application
 that makes use of the legion framework.
-
-I don't feel that legion is ready to push to hackage yet, but you can check out
-the most recent haddock docs [here](http://void.taphu.net) if you like. They
-might give you a better feel for how legion is meant to be used.
 
 
 I also recently slapped together a lighting talk, with

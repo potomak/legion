@@ -38,9 +38,8 @@ import qualified Network.Legion.Propagation as P
   the other distributed systems reasons your partition state might have more
   than one value.
 
-  You can save can save these guys to disk in your
-  `Network.Legion.Persistence` layer by using its `Binary`
-  instance.
+  You can save these guys to disk in your `Network.Legion.Persistence`
+  layer by using its `Binary` instance.
 -}
 newtype PartitionPowerState i s = PartitionPowerState {
     unPowerState :: PropPowerState PartitionKey s Peer i

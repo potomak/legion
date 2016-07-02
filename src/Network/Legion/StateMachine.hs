@@ -298,9 +298,14 @@ heartbeat = do
 {- |
   Migrate partitions based on new cluster state information.
 
-  TODO: this migration algorithm is super naive. It just gos ahead
+  TODO: this migration algorithm is super naive. It just goes ahead
   and migrates everything in one pass, which is going to be terrible
   for performance.
+
+  Also, it is important to remember that "migrate" in this context does
+  not mean "transfer data". Rather, "migrate" means to add a participating
+  peer to a partition. This will cause the data to be transfered in the
+  normal course of propagation.
 -}
 migrate :: (LegionConstraints i o s) => Legionary i o s -> StateM i o s ()
 migrate Legionary{persistence} = do
@@ -318,6 +323,7 @@ migrate Legionary{persistence} = do
         let
           origProp = fromMaybe (P.initProp self ps) (lookup key propStates)
           newPeers_ = C.findPartition key cluster \\ P.projParticipants origProp
+          {- This 'P.participate' is where the magic happens. -}
           newProp = foldr P.participate origProp (Set.toList newPeers_)
         in do
           $(logDebug) . pack $ "Migrating: " ++ show key
