@@ -110,20 +110,20 @@ rebalanceAction self allPeers (D dist) =
     _rebalance = error "rebalance undefined"
     rebuild =
       let
-        underserved = {- t "underserved" -} [
-            (ks, ps) |
-            (ks, ps) <- {- t "dist" -} dist,
-            Set.size ps < 3,
-            not (self `Set.member` ps)
+        underserved = [
+            (ks, ps)
+            | (ks, ps) <- dist
+            , Set.size ps < 3
+            , not (self `Set.member` ps)
           ]
         mostUnderserved = sortBy (compare `on` Set.size . snd) underserved
-      in case {- t "mostUnderserved" -} mostUnderserved of
+      in case mostUnderserved of
         [] -> Nothing
         (ks, ps):_ -> 
           let
             candidateHosts = toList (allPeers Set.\\ ps)
             bestHosts = sort [(weightOf p, p) | p <- candidateHosts]
-          in case {- t "bestHosts" -} bestHosts of
+          in case bestHosts of
             {- we are the best host -}
             (_, candidate):_ | candidate == self -> Just (Invite ks)
             _ -> Nothing

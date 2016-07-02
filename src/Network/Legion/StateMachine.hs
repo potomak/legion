@@ -472,9 +472,9 @@ instance Show (Forwarded o) where
   The type of messages sent to us from other peers.
 -}
 data PeerMessage i o s = PeerMessage {
-    source :: Peer,
+       source :: Peer,
     messageId :: MessageId,
-    payload :: PeerMessagePayload i o s
+      payload :: PeerMessagePayload i o s
   }
   deriving (Generic, Show)
 instance (Binary i, Binary o, Binary s) => Binary (PeerMessage i o s)
