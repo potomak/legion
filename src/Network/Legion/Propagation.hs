@@ -23,6 +23,8 @@ module Network.Legion.Propagation (
   participating,
   allParticipants,
   projParticipants,
+  projected,
+  infimum,
 ) where
 
 import Prelude hiding (lookup)
@@ -328,5 +330,19 @@ allParticipants = PS.allParticipants . powerState
 -}
 projParticipants :: (Ord p) => PropState o s p d -> Set p
 projParticipants = PS.projParticipants . powerState
+
+
+{- |
+  Get the projected value of a PropPowerState.
+-}
+projected :: (ApplyDelta d s) => PropPowerState o s p d -> s
+projected = PS.projectedValue . unPowerState
+
+
+{- |
+  Get the infimum value of the PropPowerState.
+-}
+infimum :: PropPowerState o s p d -> s
+infimum = PS.infimumValue . unPowerState
 
 

@@ -17,6 +17,7 @@ module Network.Legion.PowerState (
   participate,
   disassociate,
   projectedValue,
+  infimumValue,
   infimumParticipants,
   allParticipants,
   projParticipants,
@@ -238,6 +239,13 @@ projectedValue PowerState {infimum = Infimum {stateValue}, deltas} =
     changes = foldr getDeltas [] (toDescList deltas)
     getDeltas (_, (Delta d, _)) acc = d:acc
     getDeltas _ acc = acc
+
+
+{- |
+  Return the current infimum value of the power state.
+-}
+infimumValue :: PowerState o s p d -> s
+infimumValue PowerState {infimum = Infimum {stateValue}} = stateValue
 
 
 {- |

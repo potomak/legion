@@ -17,6 +17,8 @@ module Network.Legion.PartitionState (
   heartbeat,
   participate,
   projParticipants,
+  projected,
+  infimum,
 ) where
 
 import Data.Binary (Binary)
@@ -163,5 +165,19 @@ participate peer = PartitionPropState . P.participate peer . unPropState
 -}
 projParticipants :: PartitionPropState i s -> Set Peer
 projParticipants = P.projParticipants . unPropState
+
+
+{- |
+  Get the projected value of a `PartitionPowerState`.
+-}
+projected :: (ApplyDelta i s) => PartitionPowerState i s -> s
+projected = P.projected . unPowerState
+
+
+{- |
+  Get the infimum value of a `PartitionPowerState`
+-}
+infimum :: PartitionPowerState i s -> s
+infimum = P.infimum . unPowerState
 
 
