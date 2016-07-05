@@ -133,10 +133,7 @@ data StartupMode
   = NewCluster
     -- ^ Indicates that we should bootstrap a new cluster at startup. The
     --   persistence layer may be safely pre-populated because the new
-    --   node will claim the entire keyspace. Future plans include
-    --   implementing some safeguards to make sure only one node in
-    --   a cluster was started using this startup mode, but for now,
-    --   we are counting on you, the user, to do the right thing.
+    --   node will claim the entire keyspace. 
   | JoinCluster SockAddr
     -- ^ Indicates that the node should try to join an existing cluster,
     --   either by starting fresh, or by recovering from a shutdown
