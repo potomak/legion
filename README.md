@@ -76,6 +76,6 @@ Homogeneously scalable systems generally require:
 
 ## Development Status
 
-The Legion framework is still pre-alpha.
+The Legion framework is still experimental.
 
 -
