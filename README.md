@@ -2,10 +2,12 @@
 
 - [Purpose](#purpose)
     - [Examples](#examples)
-        - [Most of "Big Data":](#most-of-"big-data")
+        - [Most of "Big Data":](#most-of-big-data)
         - [Messaging](#messaging)
         - [General Scalability](#general-scalability)
 - [Development Status](#development-status)
+- [FAQ](#faq)
+    - [How do a "partition" in my Legion application and a "partition" as a subset of records in a distributed database relate to one another?](#how-do-a-partition-in-my-legion-application-and-a-partition-as-a-subset-of-records-in-a-distributed-database-relate-to-one-another)
 
 
 Legion is a mathematically sound framework for writing horizontally
@@ -78,4 +80,31 @@ Homogeneously scalable systems generally require:
 
 The Legion framework is still experimental.
 
--
+## FAQ
+
+### How do a "partition" in my Legion application and a "partition" as a subset of records in a distributed database relate to one another?
+
+Some people find the term "partition" confusing because of the way
+it is typically used to describe subsets of a table in distributed
+relational databases. That's ok. The term "partition" as used here
+has a more general meaning, primarily because of the more generalized
+nature of Legion as compared to a distributed database.
+
+In Legion, a partition is an abstract unit of state upon which user
+requests operate. It is called a "partition" because it "is separate
+from every other partition", meaning that an individual request can only
+operate upon a single partition, and can never span multiple partitions.
+Furthermore, Legion can only guarantee consistency within the partition
+boundaries.
+
+Another characteristic of a partition is that Legion cannot subdivide
+it.  All of the data on one partition is guaranteed to be located on the
+same physical node. Legion treats partitions as the smallest unit of
+data that can be rebalanced across the cluster.
+
+In a relational database partition, it is sometimes the case that the
+table can be "repartitioned", where rows from one partition move to
+the other. This has no analog in Legion. In Legion, a partition is an
+atomic unit of data which cannot be subdivided.
+
+
