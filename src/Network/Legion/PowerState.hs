@@ -207,7 +207,7 @@ participate :: (ApplyDelta d s, Ord p)
   => p
   -> PowerState o s p d
   -> PowerState o s p d
-participate p ps@PowerState {deltas} = reduce ps {
+participate p ps@PowerState {deltas} = acknowledge p $ ps {
     deltas = Map.insert (nextId p ps) (Join p, Set.empty) deltas
   }
 
@@ -220,7 +220,7 @@ disassociate :: (ApplyDelta d s, Ord p)
   => p
   -> PowerState o s p d
   -> PowerState o s p d
-disassociate p ps@PowerState {deltas} = reduce ps {
+disassociate p ps@PowerState {deltas} = acknowledge p $ ps {
     deltas = Map.insert (nextId p ps) (UnJoin p, Set.empty) deltas
   }
 
@@ -233,7 +233,7 @@ delta :: (ApplyDelta d s, Ord p)
   -> d
   -> PowerState o s p d
   -> PowerState o s p d
-delta p d ps@PowerState {deltas} = reduce ps {
+delta p d ps@PowerState {deltas} = acknowledge p $ ps {
     deltas = Map.insert (nextId p ps) (Delta d, Set.empty) deltas
   }
 

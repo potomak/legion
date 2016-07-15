@@ -220,7 +220,7 @@ delta :: (Ord p, ApplyDelta d s)
   -> PropState o s p d
   -> PropState o s p d
 delta d prop@PropState {self, powerState, now} =
-  let newPowerState = acknowledge self (PS.delta self d powerState)
+  let newPowerState = PS.delta self d powerState
   in prop {
       powerState = newPowerState,
       peerStates = Map.fromAscList [
