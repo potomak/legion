@@ -171,7 +171,7 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
       }
   where
     infimum = max i1 i2
-    deltas = removeObsolete (unionWith mergeKnowns d1 d2)
+    deltas = removeObsolete (unionWith mergeAcks d1 d2)
 
     {- |
       Obsolete deltas are deltas that are already included in the latest
@@ -179,7 +179,7 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     -}
     removeObsolete = filterWithKey (\k _ -> k > stateId infimum)
 
-    mergeKnowns (d, s1) (_, s2) = (d, s1 `union` s2)
+    mergeAcks (d, s1) (_, s2) = (d, s1 `union` s2)
 
 mergeEither a b = Left
   $ "PowerStates " ++ show a ++ " and " ++ show b ++ " do not share the "
