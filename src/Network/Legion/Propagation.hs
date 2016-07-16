@@ -141,10 +141,6 @@ new origin self participants =
   Like `merge`, but total. `mergeEither` returns a human readable reason why
   the foreign powerstate can't be merged in the event of an error.
 -}
-{-
-  This algorithm is weaksauce. We need to find someone who knows a lot about
-  gossip protocols to fix this.
--}
 mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show d, ApplyDelta d s)
   => p
   -> PropPowerState o s p d
@@ -156,6 +152,11 @@ mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
     Left err -> Left err
     Right merged -> Right prop {
         powerState = merged,
+
+        {-
+          This algorithm is weaksauce. We need to find someone who knows
+          a lot about gossip protocols to fix this.
+        -}
         peerStates =
           Map.fromList $ [
               (p, ns)
@@ -219,7 +220,7 @@ delta :: (Ord p, ApplyDelta d s)
   -> PropState o s p d
   -> PropState o s p d
 delta d prop@PropState {self, powerState, now} =
-  let newPowerState = acknowledge self (PS.delta self d powerState)
+  let newPowerState = PS.delta self d powerState
   in prop {
       powerState = newPowerState,
       peerStates = Map.fromAscList [

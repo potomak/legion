@@ -8,6 +8,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 {- |
   This module contains the state machine implementation of a legion node.
+
+  Discussion:
+
+  This is a first attempt to discover a pure legion state machine and isolated
+  it from the runtime IO considerations. It is obviously not perfect, because
+  everything still lives in 'LIO', which is 'IO'-backed; but mostly this is
+  because access to the persistence layer still happens here. Once we pull that
+  out into the 'Network.Legion.Runtime' module we should be clear to remove IO
+  and make this thing look more like a pure state machine. - Rick
 -}
 module Network.Legion.StateMachine (
   stateMachine,
@@ -69,7 +78,13 @@ import qualified Network.Legion.KeySet as KS
 import qualified Network.Legion.PartitionState as P
 
 
-{- | This conduit houses the main legionary state machine.  -}
+{- |
+  This conduit houses the main legionary state machine. The conduit's
+  input, internal state, and output are analogous to a "real" state
+  machine's input, state, and output. If this seems like an odd use of
+  conduit, that's ok.  Hopefully we can make this look more like a pure
+  state machine once we remove 'IO' from this module.
+-}
 stateMachine :: (LegionConstraints i o s)
   => Legionary i o s
   -> NodeState i o s
@@ -601,6 +616,10 @@ newtype StateMT i o s m r = StateMT {
     Functor, Applicative, Monad, MonadLogger, MonadCatch,
     MonadThrow, MonadIO
   )
+{-
+  We can lift things from the underlying monad straight to 'StateT',
+  bypassing the `CondutM` layer.
+-}
 instance MonadTrans (StateMT i o s) where
   lift = StateMT . lift . lift
 

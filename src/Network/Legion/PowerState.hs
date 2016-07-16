@@ -36,8 +36,8 @@ import Data.Map (Map, filterWithKey, unionWith, minViewWithKey, keys,
 import Data.Set (Set, union, (\\), null, member)
 import Data.Word (Word64)
 import GHC.Generics (Generic)
-import qualified Data.Map as Map (insert, empty)
-import qualified Data.Set as Set (insert, empty, delete)
+import qualified Data.Map as Map
+import qualified Data.Set as Set
 
 
 {- |
@@ -164,12 +164,21 @@ mergeEither :: (Eq o, ApplyDelta d s, Ord p, Show o, Show s, Show p, Show d)
   -> PowerState o s p d
   -> Either String (PowerState o s p d)
 mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
-    Right . reduce $ PowerState {origin = o1, infimum, deltas}
+    Right . reduce $ PowerState {
+        origin = o1,
+        infimum,
+        deltas = removeObsolete (unionWith mergeAcks d1 d2)
+      }
   where
     infimum = max i1 i2
-    deltas = removeObsolete (unionWith mergeKnowns d1 d2)
+
+    {- |
+      Obsolete deltas are deltas that are already included in the latest
+      infimum.
+    -}
     removeObsolete = filterWithKey (\k _ -> k > stateId infimum)
-    mergeKnowns (d, s1) (_, s2) = (d, s1 `union` s2)
+
+    mergeAcks (d, s1) (_, s2) = (d, s1 `union` s2)
 
 mergeEither a b = Left
   $ "PowerStates " ++ show a ++ " and " ++ show b ++ " do not share the "
@@ -198,7 +207,7 @@ participate :: (ApplyDelta d s, Ord p)
   => p
   -> PowerState o s p d
   -> PowerState o s p d
-participate p ps@PowerState {deltas} = reduce ps {
+participate p ps@PowerState {deltas} = acknowledge p $ ps {
     deltas = Map.insert (nextId p ps) (Join p, Set.empty) deltas
   }
 
@@ -211,7 +220,7 @@ disassociate :: (ApplyDelta d s, Ord p)
   => p
   -> PowerState o s p d
   -> PowerState o s p d
-disassociate p ps@PowerState {deltas} = reduce ps {
+disassociate p ps@PowerState {deltas} = acknowledge p $ ps {
     deltas = Map.insert (nextId p ps) (UnJoin p, Set.empty) deltas
   }
 
@@ -224,7 +233,7 @@ delta :: (ApplyDelta d s, Ord p)
   -> d
   -> PowerState o s p d
   -> PowerState o s p d
-delta p d ps@PowerState {deltas} = reduce ps {
+delta p d ps@PowerState {deltas} = acknowledge p $ ps {
     deltas = Map.insert (nextId p ps) (Delta d, Set.empty) deltas
   }
 
