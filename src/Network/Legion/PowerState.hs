@@ -36,8 +36,8 @@ import Data.Map (Map, filterWithKey, unionWith, minViewWithKey, keys,
 import Data.Set (Set, union, (\\), null, member)
 import Data.Word (Word64)
 import GHC.Generics (Generic)
-import qualified Data.Map as Map (insert, empty)
-import qualified Data.Set as Set (insert, empty, delete)
+import qualified Data.Map as Map
+import qualified Data.Set as Set
 
 
 {- |
