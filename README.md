@@ -1,80 +1,119 @@
 # legion
 
-- [Purpose](#purpose)
-    - [Examples](#examples)
-        - [Most of "Big Data":](#most-of-big-data)
-        - [Messaging](#messaging)
-        - [General Scalability](#general-scalability)
+- [Motivation](#motivation)
+    - [Disadvantages of offloading state to the DB](#disadvantages-of-offloading-state-to-the-db)
+    - [Solutions](#solutions)
 - [Development Status](#development-status)
 - [FAQ](#faq)
     - [How do a "partition" in my Legion application and a "partition" as a subset of records in a distributed database relate to one another?](#how-do-a-partition-in-my-legion-application-and-a-partition-as-a-subset-of-records-in-a-distributed-database-relate-to-one-another)
 
 
-Legion is a mathematically sound framework for writing horizontally
-scalable user applications. Historically, horizontal scalability has
-been achieved via the property of statelessness. Programmers would
-design their applications to be free of any kind of persistent state,
-avoiding the problem of distributed state management. This almost never
-turns out to really be possible, so programmers achieve "statelessness"
-by delegating application state management to some kind of external,
-shared database -- which ends up having its own scalability problems.
+Legion is a framework for writing horizontally scalable stateful
+applications, particularly microservices.
 
-In addition to scalability problems, which modern databases (especially NoSQL
-databases) have done a good job of solving, there is another, more fundamental
-problem facing these architectures: The application is not really stateless.
+## Motivation
 
-Legion is a Haskell framework that abstracts state partitioning, data
-replication, request routing, and cluster rebalancing, making it easy
-to implement large and robust distributed data applications.
+Writing stateful microservices is hard. Typically, the way stateful
+services are written to make them easy is they are written as stateless
+services that offload state to a database, making the database the
+stateful service. This approach has several disadvantages, the most
+important of which is that it is not always possible in principal to
+accomplish what you need.
 
-Examples of services that rely on partitioning include ElasticSearch,
-Riak, DynamoDB, and others. In other words, almost all scalable databases.
+Why is it hard to write stateful microservices *without* resorting to
+the DB?  Well, for the same reason it is hard to write a distributed
+database in the first place. If you are storing state, you have to
+worry about scaling that state by distributing it across a cluster,
+ensuring the durability of the state by replicating it, finding the
+state so that it can be matched with relevant requests.  You have to
+worry about nodes entering an exiting the cluster, and how the state is
+repaired and rebalanced when the cluster topology changes.
 
-Check out https://github.com/taphu/legion-cache for a simple application
-that makes use of the legion framework.
+Wouldn't it be nice if you could get all that for free and just focus
+on logic of your microservice application?
 
+### Disadvantages of Offloading State to the DB
 
-I also recently slapped together a lighting talk, with
-[these slides](https://docs.google.com/presentation/d/1XWZp9aPfeIxfgBWoTVUkLOgO5rgS54xZo0F4FgLKu7g/edit?usp=sharing)
+- Data Transfer.
 
-## Purpose
+  Transfer costs are only trivial if the size of your state is trivial,
+  and probably not even then if you are dealing with frequently accessed
+  objects, or hot spots. It is difficult to offload state to the DB in
+  this way if the size of your state objects is large.
 
-Legion's purpose is to make it easy to write statful applications which
-are scalable homogeneously across and unbounded number of nodes.
+- Consistency Is Still a Problem.
 
-### Examples
+  Distributed databases have gotten good at providing eventual consistency
+  for the semantics of database operations, but not for the semantics of
+  your application. Counters are a common example of this. Say a field
+  in your DB object represents some kind of counter keeping track of the
+  instances of some event or other. Two instances of the event happen
+  simultaneously on two different nodes. Node A reads the current value,
+  which is 10. Node B reads the current value, which is 10. Node A adds
+  1, and stores the new value as 11. Node B adds 1, and stores the new
+  value as 11. Two events happened, but the countered only moved from 10
+  to 11. Your data is now inconsistent in relation to your application
+  semantics.
 
-To illustrate the purpose of the Legion framework, it may helpful to give some
-examples of existing software that could be solved by using Legion.
+  It is true that some databases are starting to provide tools to handle
+  this specific case, and others which are similar, but those tools are
+  not typically generalizable, or else require locking which may lead
+  to substandard performance, or break A or P in the CAP Theorem.
 
-Examples include:
+  Another approach some people take to solve this problem is to store
+  CRDTs in the database layer (in fact, Legion relies heavily on CRDTs
+  internally). This approach is limited by the support of your database,
+  and in any case using CRDTs this way is problematic because the growth
+  of most CRDTs is unbounded and increases with usage, causing the
+  size of the CRDT to become prohibitively large over time. It is very
+  difficult to do garbage collection on such CRDTs in a hybrid system.
+  One of the most important things Legion does internally is implement
+  asynchronous CRDT garbage collection.
 
-#### Most of "Big Data":
-- Riak
-- ElasitcSearch
-- Hadoop
-- DynamoDB
-- Other distributed storage and map/reduce.
+### Solutions
 
-#### Messaging
-- RabbitMQ
-- Jabber
-- Other large scale AMQP
-- Other distributed queuing.
+The general philosophy that Legion takes to solving the problems of the
+application/DB hybrid approach is not new. Instead of moving data to
+where a request is being handled, we move the request handling to where
+the data lives.  What is interesting is the implementation, which has the
+following characteristics:
 
-#### General Scalability
+- Request Routing.
 
-Any sort of software system that scales homogeneously across multiple machines
-is going to run hard up against at least one of the general problems that
-Legion is designed to solve.
+  User's of the Legion framework supply a request handler which is used
+  to service application requests. Requests are routed by the Legion
+  runtime to a node in cluster where the data actually resides and the
+  request is executed by the user-provided request handler.
 
-Homogeneously scalable systems generally require:
+- CAP Theorem.
 
-- Distributed State, which means partitioning of the state data.
-- Request routing, that sends the code to the data instead of bringing the data to the code.
-- Flexible capacity, meaning that you can add nodes to the cluster, which means cluster rebalancing.
-- Durability and Availability, which mean replicated state.
+  Legion chooses A and P. In other words, Legion focuses on eventual
+  consistency while maintaining availability and fault tolerance.
 
+  This is a little bit trickier than it seems at first glance. You are
+  probably used to this option being chosen by distributed databases;
+  in fact choosing A and P is basically the whole point of why many
+  distributed databases exist in the first place. However, distributed
+  DBs don't offer eventual consistency over **arbitrary user-defined
+  semantics**. See "Consistency Is Still a Problem" above. Being
+  eventually consistent with arbitrary semantics is a lot harder than with
+  "last write wins".
+
+- Meet Semilattices.
+  
+  TODO: fill out this section.
+
+- Pure Haskell Interface.
+
+  TODO: fill out this section.
+
+- Automatic Rebalancing.
+
+  TODO: fill out this section.
+
+- Replication.
+
+  TODO: fill out this section.
 
 ## Development Status
 
