@@ -164,11 +164,17 @@ mergeEither :: (Eq o, ApplyDelta d s, Ord p, Show o, Show s, Show p, Show d)
   -> PowerState o s p d
   -> Either String (PowerState o s p d)
 mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
-    Right . reduce $ PowerState {origin = o1, infimum, deltas}
+    Right . reduce $ PowerState {
+        origin = o1,
+        infimum,
+        deltas
+      }
   where
     infimum = max i1 i2
     deltas = removeObsolete (unionWith mergeKnowns d1 d2)
+
     removeObsolete = filterWithKey (\k _ -> k > stateId infimum)
+
     mergeKnowns (d, s1) (_, s2) = (d, s1 `union` s2)
 
 mergeEither a b = Left
