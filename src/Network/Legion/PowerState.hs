@@ -167,11 +167,10 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     Right . reduce $ PowerState {
         origin = o1,
         infimum,
-        deltas
+        deltas = removeObsolete (unionWith mergeAcks d1 d2)
       }
   where
     infimum = max i1 i2
-    deltas = removeObsolete (unionWith mergeAcks d1 d2)
 
     {- |
       Obsolete deltas are deltas that are already included in the latest
