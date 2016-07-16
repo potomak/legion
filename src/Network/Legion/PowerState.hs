@@ -173,6 +173,10 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     infimum = max i1 i2
     deltas = removeObsolete (unionWith mergeKnowns d1 d2)
 
+    {- |
+      Obsolete deltas are deltas that are already included in the latest
+      infimum.
+    -}
     removeObsolete = filterWithKey (\k _ -> k > stateId infimum)
 
     mergeKnowns (d, s1) (_, s2) = (d, s1 `union` s2)
