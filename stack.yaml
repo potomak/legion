@@ -4,6 +4,8 @@ packages:
 - '.'
 extra-deps:
 - Ranged-sets-0.3.0
+- canteven-http-0.1.1.0
+- canteven-log-1.0.0.0
 - data-bword-0.1.0.1
 - data-dword-0.3.1
 - scotty-resource-0.1.1.0
