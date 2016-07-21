@@ -27,6 +27,7 @@ import Network.Legion.KeySet (KeySet, member, (\\), null)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.UUID (getUUID)
+import Text.Read (readPrec)
 import qualified Data.Set as Set
 import qualified Network.Legion.KeySet as KS
 
@@ -35,6 +36,9 @@ import qualified Network.Legion.KeySet as KS
   The way to identify a peer.
 -}
 newtype Peer = Peer UUID deriving (Show, Binary, Eq, Ord)
+instance Read Peer where
+  readPrec = Peer <$> readPrec
+  
 
 
 {- |
