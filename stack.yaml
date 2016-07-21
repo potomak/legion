@@ -4,8 +4,7 @@ packages:
 - '.'
 extra-deps:
 - Ranged-sets-0.3.0
-- data-bword-0.1
-- data-dword-0.3
-- scotty-0.11.0
+- data-bword-0.1.0.1
+- data-dword-0.3.1
 - scotty-resource-0.1.1.0
-resolver: lts-5.15
+resolver: lts-6.7
