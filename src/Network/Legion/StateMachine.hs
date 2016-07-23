@@ -132,7 +132,7 @@ handleMessage l msg = do
         Just (peer, _) ->
           forward peer key request respond
     J m -> handleJoinRequest m
-    A m -> lift . handleAdminMessage l m =<< getS
+    A m -> handleAdminMessage l m
 
 
 {- | Handles one incomming message from a peer. -}
@@ -287,11 +287,10 @@ handleJoinRequest (JoinRequest peerAddr, respond) = do
 handleAdminMessage
   :: Legionary i o s
   -> AdminMessage i o s
-  -> NodeState i o s
-  -> LIO ()
-handleAdminMessage _ (GetState respond) ns =
-  respond ns
-handleAdminMessage Legionary {persistence} (GetPart key respond) _ = do
+  -> StateM i o s ()
+handleAdminMessage _ (GetState respond) =
+  lift . respond =<< getS
+handleAdminMessage Legionary {persistence} (GetPart key respond) = lift $ do
   partitionVal <- lift (getState persistence key)
   respond partitionVal
 
