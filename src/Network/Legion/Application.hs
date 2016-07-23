@@ -40,8 +40,7 @@ data Legionary i o s = Legionary {
     {- |
       The request handler, implemented by the user to service requests.
 
-      Returns a response to the request, together with the new partition
-      state.
+      Given a request and a state, returns a response to the request.
     -}
     handleRequest :: PartitionKey -> i -> s -> o,
     {- |
