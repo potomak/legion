@@ -11,7 +11,7 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import Control.Monad (void, forever)
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Data.Conduit (Source, Sink, ($$), await, ($=), yield, await)
+import Data.Conduit (Source, Sink, ($$), ($=), yield, awaitForever)
 import qualified Data.Conduit.List as CL (map)
 
 {- |
@@ -25,13 +25,7 @@ chanToSource chan = forever $ yield =<< liftIO (readChan chan)
  Convert an chanel into a Sink.
 -}
 chanToSink :: (MonadIO io) => Chan a -> Sink a io ()
-chanToSink chan = do
-  val <- await
-  case val of
-    Nothing -> return ()
-    Just v -> do
-      liftIO (writeChan chan v)
-      chanToSink chan
+chanToSink chan = awaitForever (liftIO . writeChan chan)
 
 
 {- |
