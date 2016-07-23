@@ -293,6 +293,34 @@ handleAdminMessage _ (GetState respond) =
 handleAdminMessage Legionary {persistence} (GetPart key respond) = lift $ do
   partitionVal <- lift (getState persistence key)
   respond partitionVal
+handleAdminMessage _ (Eject peer respond) = do
+    {-
+      TODO: we should attempt to notify the ejected peer that it has
+      been ejected instead of just cutting it off and washing our hands
+      of it. I have a vague notion that maybe ejected peers should be
+      permanently recorded in the cluster state so that if they ever
+      reconnect then we can notify them that they are no longer welcome
+      to participate.
+
+      On a related note, we need to think very hard about the split brain
+      problem. A random thought about that is that we should consider the
+      extreme case where the network just fails completely and every node
+      believes that every other node should be or has been ejected. This
+      would obviously be catastrophic in terms of data durability unless
+      we have some way to reintegrate an ejected node. So, either we
+      have to guarantee that such a situation can never happen, or else
+      implement a reintegration strategy.  It might be acceptable for
+      the reintegration strategy to be very costly if it is characterized
+      as an extreme recovery scenario.
+
+      Question: would a reintegration strategy become less costly if the
+      "next state id" for a peer were global across all power states
+      instead of local to each power state?
+    -}
+    modifyS eject
+    lift $ respond ()
+  where
+    eject ns@NodeState {cluster} = ns {cluster = C.eject peer cluster}
 
 
 {- | Update all of the propagation states with the current time.  -}
@@ -475,10 +503,12 @@ instance Binary JoinResponse
 data AdminMessage i o s
   = GetState (NodeState i o s -> LIO ())
   | GetPart PartitionKey (Maybe (PartitionPowerState i s) -> LIO ())
+  | Eject Peer (() -> LIO ())
 
 instance Show (AdminMessage i o s) where
   show (GetState _) = "(GetState _)"
   show (GetPart k _) = "(GetPart " ++ show k ++ " _)"
+  show (Eject p _) = "(Eject " ++ show p ++ " _)"
 
 
 {- | Defines the local state of a node in the cluster.  -}
@@ -658,5 +688,12 @@ getS = StateMT get
 -}
 putS :: NodeState i o s -> StateMT i o s m ()
 putS = StateMT . put
+
+
+{- |
+  Modify the node state.
+-}
+modifyS :: (NodeState i o s -> NodeState i o s) -> StateMT i o s m ()
+modifyS f = putS . f =<< getS
 
 

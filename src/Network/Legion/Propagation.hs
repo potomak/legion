@@ -18,6 +18,7 @@ module Network.Legion.Propagation (
   getPowerState,
   ask,
   participate,
+  disassociate,
   getSelf,
   divergences,
   participating,
@@ -284,6 +285,24 @@ participate :: (Ord p, ApplyDelta d s)
   -> PropState o s p d
 participate peer prop@PropState {powerState, now} =
   let newPowerState = PS.participate peer powerState
+  in prop {
+      powerState = newPowerState,
+      peerStates = Map.fromAscList [
+          (p, NeedsSendAt now)
+          | p <- Set.toAscList (divergent newPowerState)
+        ]
+    }
+
+
+{- |
+  Eject a participant from the power state.
+-}
+disassociate :: (Ord p, ApplyDelta d s)
+  => p
+  -> PropState o s p d
+  -> PropState o s p d
+disassociate peer prop@PropState {powerState, now} =
+  let newPowerState = PS.disassociate peer powerState
   in prop {
       powerState = newPowerState,
       peerStates = Map.fromAscList [
