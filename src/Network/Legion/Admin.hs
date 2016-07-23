@@ -42,28 +42,28 @@ runAdmin :: (LegionConstraints i o s)
   -> HostPreference
   -> LIO (Source LIO (AdminMessage i o s))
 runAdmin addr host = do
-  logging <- askLoggerIO
-  chan <- lift newChan
-  void . lift . forkIO . (`runLoggingT` logging) $
-    let
-      website :: ScottyT Text LIO ()
-      website = do
-        middleware
-          $ requestLogging logging
-          . setServer
-          . logExceptionsAndContinue logging
+    logging <- askLoggerIO
+    chan <- lift newChan
+    void . lift . forkIO . (`runLoggingT` logging) $
+      let
+        website :: ScottyT Text LIO ()
+        website = do
+          middleware
+            $ requestLogging logging
+            . setServer
+            . logExceptionsAndContinue logging
 
-        resource "/clusterstate" $
-          get $ do
-            val <- send chan GetState
-            text (pack (show val))
-        resource "/propstate/:key" $
-          get $ do
-            key <- K . read <$> param "key"
-            val <- send chan (GetPart key)
-            text (pack (show val))
-    in scottyOptsT (options addr host) (`runLoggingT` logging) website
-  return (chanToSource chan)
+          resource "/clusterstate" $
+            get $ do
+              val <- send chan GetState
+              text (pack (show val))
+          resource "/propstate/:key" $
+            get $ do
+              key <- K . read <$> param "key"
+              val <- send chan (GetPart key)
+              text (pack (show val))
+      in scottyOptsT (options addr host) (`runLoggingT` logging) website
+    return (chanToSource chan)
   where
     send
       :: Chan (AdminMessage i o s)
