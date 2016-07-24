@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE TemplateHaskell #-}
 {- |
@@ -116,9 +117,8 @@ connection addr = do
       "working" socket is.
     -}
     sendWithRetry :: Maybe Socket -> ByteString -> LIO (Maybe Socket)
-    sendWithRetry Nothing payload = do
-      result <- (lift . try) openSocket
-      case result of
+    sendWithRetry Nothing payload =
+      (lift . try) openSocket >>= \case
         Left err -> do
           $(logWarn) . pack
             $ "Can't connect to: " ++ show addr ++ ". Dropping message on "
@@ -136,9 +136,8 @@ connection addr = do
               ++ "The message was: " ++ show payload
             Right _ -> return ()
           return (Just so)
-    sendWithRetry (Just so) payload = do
-      result <- (lift . try) (sendAll so payload)
-      case result of
+    sendWithRetry (Just so) payload =
+      (lift . try) (sendAll so payload) >>= \case
         Left err -> do
           $(logInfo) . pack
             $ "Socket to " ++ show addr ++ " died. Retrying on a new "

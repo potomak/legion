@@ -164,7 +164,7 @@ mergeEither :: (Eq o, ApplyDelta d s, Ord p, Show o, Show s, Show p, Show d)
   -> PowerState o s p d
   -> Either String (PowerState o s p d)
 mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
-    Right . reduce $ PowerState {
+    Right . reduce . removeRenegade $ PowerState {
         origin = o1,
         infimum,
         deltas = removeObsolete (unionWith mergeAcks d1 d2)
@@ -177,6 +177,33 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
       infimum.
     -}
     removeObsolete = filterWithKey (\k _ -> k > stateId infimum)
+
+    {- |
+      Renegade deltas are deltas that originate from a non-participating
+      peer.  This might happen in a network partition situation, where
+      the cluster ejected a peer that later reappears on the network,
+      broadcasting updates.
+
+      In reality, this will probably always be a no-op because the
+      message dispatcher in the main state machine will immediately
+      drop messages that originate from unknown peers (where "unknown"
+      includes peers that have been ejected), so it is unlikely that any
+      renegade merge requests will make it this far, but you can never
+      be too paranoid I guess.
+    -}
+    removeRenegade ps =
+        ps {
+            deltas =
+              fromAscList
+              . filter nonRenegade
+              . toAscList
+              . deltas
+              $ ps
+          }
+      where
+        nonRenegade (BottomSid, _) = True
+        nonRenegade (Sid _ p, _) = p `member` peers
+        peers = allParticipants ps
 
     mergeAcks (d, s1) (_, s2) = (d, s1 `union` s2)
 

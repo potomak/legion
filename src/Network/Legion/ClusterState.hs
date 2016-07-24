@@ -17,6 +17,7 @@ module Network.Legion.ClusterState (
   findPartition,
   getDistribution,
   joinCluster,
+  eject,
   mergeEither,
   actions,
   allParticipants,
@@ -83,6 +84,7 @@ newtype ClusterPropState = ClusterPropState {
 data Update
   = PeerJoined Peer BSockAddr
   | Participating Peer KeySet
+  | PeerEjected Peer
   deriving (Show, Generic)
 instance Binary Update
 instance ApplyDelta Update ClusterState where
@@ -90,6 +92,11 @@ instance ApplyDelta Update ClusterState where
     cs {peers = Map.insert peer addr peers}
   apply (Participating peer ks) cs@ClusterState {distribution} =
     cs {distribution = modify (Set.insert peer) ks distribution}
+  apply (PeerEjected peer) cs@ClusterState {distribution, peers} =
+    cs {
+        distribution = modify (Set.delete peer) full distribution,
+        peers = Map.delete peer peers
+      }
 
 
 {- |
@@ -170,6 +177,17 @@ joinCluster peer addy =
   ClusterPropState
   . P.delta (PeerJoined peer addy)
   . P.participate peer
+  . unPropState
+
+
+{- |
+  Eject a peer from the cluster.
+-}
+eject :: Peer -> ClusterPropState -> ClusterPropState
+eject peer =
+  ClusterPropState
+  . P.delta (PeerEjected peer)
+  . P.disassociate peer
   . unPropState
 
 

@@ -1,5 +1,7 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 {- |
   This module contains the admin interface code.
 -}
@@ -11,27 +13,30 @@ import Canteven.HTTP (requestLogging, logExceptionsAndContinue)
 import Control.Concurrent (forkIO, newChan, newEmptyMVar, writeChan,
   putMVar, takeMVar, Chan)
 import Control.Monad (void)
-import Control.Monad.Logger (askLoggerIO, runLoggingT)
+import Control.Monad.Logger (askLoggerIO, runLoggingT, logDebug)
 import Control.Monad.Trans.Class (lift)
 import Data.Conduit (Source)
 import Data.Default.Class (def)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Lazy (Text, pack)
 import Data.Version (showVersion)
+import Network.HTTP.Types (notFound404)
 import Network.Legion.Application (LegionConstraints)
 import Network.Legion.Conduit (chanToSource)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey(K))
-import Network.Legion.StateMachine (AdminMessage(GetState, GetPart))
+import Network.Legion.StateMachine (AdminMessage(GetState, GetPart,
+  Eject))
 import Network.Wai (Middleware, modifyResponse)
 import Network.Wai.Handler.Warp (HostPreference, defaultSettings, Port,
   setHost, setPort)
 import Network.Wai.Middleware.AddHeaders (addHeaders)
 import Network.Wai.Middleware.StripHeaders (stripHeader)
 import Paths_legion (version)
-import Web.Scotty.Resource.Trans (resource, get)
+import Text.Read (readMaybe)
+import Web.Scotty.Resource.Trans (resource, get, delete)
 import Web.Scotty.Trans (Options, scottyOptsT, settings, ScottyT, text,
-  ActionT, param, middleware)
+  ActionT, param, middleware, status)
 import qualified Data.Text as T
 
 {- |
@@ -42,28 +47,36 @@ runAdmin :: (LegionConstraints i o s)
   -> HostPreference
   -> LIO (Source LIO (AdminMessage i o s))
 runAdmin addr host = do
-  logging <- askLoggerIO
-  chan <- lift newChan
-  void . lift . forkIO . (`runLoggingT` logging) $
-    let
-      website :: ScottyT Text LIO ()
-      website = do
-        middleware
-          $ requestLogging logging
-          . setServer
-          . logExceptionsAndContinue logging
+    logging <- askLoggerIO
+    chan <- lift newChan
+    void . lift . forkIO . (`runLoggingT` logging) $
+      let
+        website :: ScottyT Text LIO ()
+        website = do
+          middleware
+            $ requestLogging logging
+            . setServer
+            . logExceptionsAndContinue logging
 
-        resource "/clusterstate" $
-          get $ do
-            val <- send chan GetState
-            text (pack (show val))
-        resource "/propstate/:key" $
-          get $ do
-            key <- K . read <$> param "key"
-            val <- send chan (GetPart key)
-            text (pack (show val))
-    in scottyOptsT (options addr host) (`runLoggingT` logging) website
-  return (chanToSource chan)
+          resource "/clusterstate" $
+            get $ do
+              val <- send chan GetState
+              text (pack (show val))
+          resource "/propstate/:key" $
+            get $ do
+              key <- K . read <$> param "key"
+              val <- send chan (GetPart key)
+              text (pack (show val))
+          resource "/peers/:peer" $
+            delete $
+              readMaybe <$> param "peer" >>= \case
+                Nothing -> status notFound404
+                Just peer -> do
+                  lift . $(logDebug) . T.pack $ "Ejecting peer: " ++ show peer
+                  send chan (Eject peer)
+
+      in scottyOptsT (options addr host) (`runLoggingT` logging) website
+    return (chanToSource chan)
   where
     send
       :: Chan (AdminMessage i o s)
