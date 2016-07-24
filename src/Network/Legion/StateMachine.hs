@@ -523,7 +523,7 @@ data NodeState i o s = NodeState {
   deriving (Show)
 
 
-{- | A set of forwardmed messages.  -}
+{- | A set of forwarded messages.  -}
 newtype Forwarded o = F {unF :: Map MessageId (o -> LIO ())}
 instance Show (Forwarded o) where
   show = show . Map.keys . unF

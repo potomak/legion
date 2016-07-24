@@ -15,14 +15,14 @@ import Data.Conduit (Source, Sink, ($$), ($=), yield, awaitForever)
 import qualified Data.Conduit.List as CL (map)
 
 {- |
-  Convert a chanel into a Source.
+  Convert a channel into a Source.
 -}
 chanToSource :: (MonadIO io) => Chan a -> Source io a
 chanToSource chan = forever $ yield =<< liftIO (readChan chan)
 
 
 {- |
- Convert an chanel into a Sink.
+ Convert a channel into a Sink.
 -}
 chanToSink :: (MonadIO io) => Chan a -> Sink a io ()
 chanToSink chan = awaitForever (liftIO . writeChan chan)
