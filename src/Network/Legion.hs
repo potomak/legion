@@ -161,7 +161,10 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 --------------------------------------------------------------------------------
 
 -- $invocation
--- Notes on invocation.
+-- While this section is being worked on, you can check out the
+-- [legion-cache](https://github.com/taphu/legion-cache) project for a
+-- working example of how to build a basic distributed key-value store
+-- using Legion.
 
 --------------------------------------------------------------------------------
 
