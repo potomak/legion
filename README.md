@@ -1,9 +1,10 @@
 # legion
 
 - [Motivation](#motivation)
-    - [Disadvantages of offloading state to the DB](#disadvantages-of-offloading-state-to-the-db)
+    - [Disadvantages of Offloading State to the DB](#disadvantages-of-offloading-state-to-the-db)
     - [Solutions](#solutions)
 - [Development Status](#development-status)
+    - [Examples](#examples)
 - [FAQ](#faq)
     - [How do a "partition" in my Legion application and a "partition" as a subset of records in a distributed database relate to one another?](#how-do-a-partition-in-my-legion-application-and-a-partition-as-a-subset-of-records-in-a-distributed-database-relate-to-one-another)
 
@@ -118,6 +119,11 @@ following characteristics:
 ## Development Status
 
 The Legion framework is still experimental.
+
+### Examples
+
+Check out the [legion-cache](https://github.com/taphu/legion-cache) project for
+an example of how to build a basic distributed key-value store with legion.
 
 ## FAQ
 
