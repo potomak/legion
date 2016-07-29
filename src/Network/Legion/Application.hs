@@ -35,6 +35,14 @@ class (
 {- |
   This is the type of a user-defined Legion application. Implement this and
   allow the Legion framework to manage your cluster.
+
+  - @__i__@ is the type of request your application will handle. @__i__@ stands
+    for __"input"__.
+  - @__o__@ is the type of response produced by your application. @__o__@ stands
+    for __"output"__
+  - @__s__@ is the type of state maintained by your application. More
+    precisely, it is the type of the individual partitions that make up
+    your global application state. @__s__@ stands for __"state"__.
 -}
 data Legionary i o s = Legionary {
     {- |

@@ -7,6 +7,7 @@
     - [Examples](#examples)
 - [FAQ](#faq)
     - [How do a "partition" in my Legion application and a "partition" as a subset of records in a distributed database relate to one another?](#how-do-a-partition-in-my-legion-application-and-a-partition-as-a-subset-of-records-in-a-distributed-database-relate-to-one-another)
+    - [Why Haskell?](#why-haskell)
 
 
 Legion is a framework for writing horizontally scalable stateful
@@ -151,5 +152,28 @@ In a relational database partition, it is sometimes the case that the
 table can be "repartitioned", where rows from one partition move to
 the other. This has no analog in Legion. In Legion, a partition is an
 atomic unit of data which cannot be subdivided.
+
+
+### Why Haskell?
+
+Developing correct distributed systems is hard. One reason it is hard is
+because it comes with a large number of very subtle rules and constraints
+that are not part of the average development process and require highly
+specialized knowledge. Typically this knowledge is entirely unrelated
+to the business problem you are trying to solve. Violating any of those
+constraints can lead to a nightmare of data corruption, scalability,
+or availability problems.
+
+Most languages are unable to enforce distributed constraints in the type
+system, forcing the developer to very carefully tread through a proverbial
+mine field. Making an error in even one step can have an associated cost
+that is wildly disproportionate to the subtlety of the error.
+
+Haskell on the other hand, has a type system that can be used to express
+these constraints. In addition to implementing the distributed runtime,
+providing a distribution-safe API is a major part of what makes Legion
+awesome. It fences off the mines so you can run through the mine field
+full tilt. If you hit one, the cost to your organization is a compile
+time error, instead of a fundamentally broken and failing project.
 
 
