@@ -260,7 +260,8 @@ handlePeerMessage -- ClusterMerge
         $(logWarn) . pack
           $ "Can't apply incomming cluster action message "
           ++ show msg ++ "because of: " ++ show err
-      Right (newCluster, newMigration) ->
+      Right (newCluster, newMigration) -> do
+        emit . NewPeers . getPeers $ newCluster
         putS nodeState {
             migration = migration `union` newMigration,
             cluster = newCluster
