@@ -2,6 +2,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 {- |
   This module contains the data types related to the distributed cluster state.
 -}
@@ -24,6 +25,7 @@ module Network.Legion.ClusterState (
   heartbeat,
 ) where
 
+import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary)
 import Data.Default.Class (Default(def))
 import Data.Map (Map)
@@ -59,6 +61,14 @@ instance Default ClusterState where
       distribution = D.empty,
              peers = Map.empty
     }
+instance ToJSON ClusterState where
+  toJSON ClusterState {distribution, peers} = object [
+      "distribution" .= distribution,
+      "peers" .= Map.fromList [
+          (show p, show a)
+          | (p, a) <- Map.toList peers
+        ]
+    ]
 
 
 {- |
@@ -75,7 +85,7 @@ newtype ClusterPowerState = ClusterPowerState {
 -}
 newtype ClusterPropState = ClusterPropState {
     unPropState :: PropState UUID ClusterState Peer Update
-  } deriving (Show)
+  } deriving (Show, ToJSON)
 
 
 {- |

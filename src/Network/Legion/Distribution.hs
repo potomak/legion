@@ -17,10 +17,12 @@ module Network.Legion.Distribution (
 
 import Prelude hiding (null)
 
+import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary)
 import Data.Function (on)
 import Data.List (sort, sortBy)
 import Data.Set (Set, toList)
+import Data.Text (pack)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
 import Network.Legion.KeySet (KeySet, member, (\\), null)
@@ -47,6 +49,11 @@ instance Read Peer where
 newtype ParticipationDefaults = D {
     unD :: [(KeySet, Set Peer)]
   } deriving (Show, Binary)
+instance ToJSON ParticipationDefaults where
+  toJSON (D dist) = object [
+      pack (show ks) .= Set.map show peers
+      | (ks, peers) <- dist
+    ]
 
 
 {- |

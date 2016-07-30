@@ -44,14 +44,17 @@ import Control.Monad.Logger (logDebug, logWarn, logError, logInfo,
   MonadLogger)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.State (StateT, runStateT, get, put)
+import Data.Aeson (ToJSON, toJSON, object, (.=), encode)
 import Data.Binary (Binary)
+import Data.ByteString.Lazy (toStrict)
 import Data.Conduit (Source, Conduit, ($$), await, awaitForever,
   transPipe, ConduitM, yield, ($=))
 import Data.Default.Class (Default)
 import Data.Map (Map, insert, lookup)
 import Data.Maybe (fromMaybe)
 import Data.Set (member, minView, (\\))
-import Data.Text (pack)
+import Data.Text (pack, unpack)
+import Data.Text.Encoding (decodeUtf8)
 import Data.Time.Clock (getCurrentTime)
 import Data.UUID (UUID)
 import Data.Word (Word64)
@@ -521,7 +524,23 @@ data NodeState i o s = NodeState {
         migration :: KeySet,
            nextId :: MessageId
   }
-  deriving (Show)
+instance (Show i, Show s) => Show (NodeState i o s) where
+  show = unpack . decodeUtf8 . toStrict . encode
+{-
+  The ToJSON instance is mainly for debugging. The Haskell-generated 'Show'
+  instance is very hard to read.
+-}
+instance (Show i, Show s) => ToJSON (NodeState i o s) where
+  toJSON (NodeState self cluster forwarded propStates migration nextId) =
+    object [
+        "self" .= show self,
+        "cluster" .= cluster,
+        -- "forwarded" .= show <$> Map.keys (unF forwarded),
+        "forwarded" .= [show k | k <- Map.keys (unF forwarded)],
+        "propStates" .= show propStates,
+        "migration" .= show migration,
+        "nextId" .= show nextId
+      ]
 
 
 {- | A set of forwarded messages.  -}
