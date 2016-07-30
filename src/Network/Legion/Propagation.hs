@@ -1,6 +1,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 {- |
   This module defines how to propagate a PowerState amoung its participants.
 -}
@@ -30,6 +31,7 @@ module Network.Legion.Propagation (
 
 import Prelude hiding (lookup)
 
+import Data.Aeson (ToJSON, object, (.=), toJSON)
 import Data.Binary (Binary)
 import Data.Default.Class (Default)
 import Data.Map (Map, lookup)
@@ -68,6 +70,16 @@ data PropState o s p d = PropState {
           self :: p,
            now :: Time
   } deriving (Eq, Show)
+instance (Show o, ToJSON s, Show p, Show d) => ToJSON (PropState o s p d) where
+  toJSON PropState {powerState, peerStates, self, now} = object [
+      "powerState" .= powerState,
+      "peerStates" .= Map.fromList [
+          (show p, show s)
+          | (p, s) <- Map.toList peerStates
+        ],
+      "self" .= show self,
+      "now" .= show now
+    ]
 
 
 {- |

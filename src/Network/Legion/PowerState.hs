@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings #-}
 {- |
   This module contains the fundamental distributed data object.
 -}
@@ -28,6 +29,7 @@ module Network.Legion.PowerState (
 
 import Prelude hiding (null)
 
+import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary(put, get))
 import Data.Default.Class (Default(def))
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
@@ -50,6 +52,15 @@ data PowerState o s p d = PowerState {
      deltas :: Map (StateId p) (Delta p d, Set p)
   } deriving (Generic, Show, Eq)
 instance (Binary o, Binary s, Binary p, Binary d) => Binary (PowerState o s p d)
+instance (Show o, ToJSON s, Show p, Show d) => ToJSON (PowerState o s p d) where
+  toJSON PowerState {origin, infimum, deltas} = object [
+      "origin" .= show origin,
+      "infimum" .= infimum,
+      "deltas" .= Map.fromList [
+          (show sid, (show d, Set.map show ps))
+          | (sid, (d, ps)) <- Map.toList deltas
+        ]
+    ]
 
 
 {- |
@@ -66,6 +77,12 @@ instance (Eq p) => Eq (Infimum s p) where
   Infimum s1 _ _ == Infimum s2 _ _ = s1 == s2
 instance (Ord p) => Ord (Infimum s p) where
   compare (Infimum s1 _ _) (Infimum s2 _ _) = compare s1 s2
+instance (ToJSON s, Show p) => ToJSON (Infimum s p) where
+  toJSON Infimum {stateId, participants, stateValue} = object [
+      "stateId" .= show stateId,
+      "participants" .= Set.map show participants,
+      "stateValue" .= stateValue
+    ]
 
 
 {- |
