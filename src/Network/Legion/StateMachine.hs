@@ -126,6 +126,7 @@ handleMessage l msg = do
           $(logWarn) . pack
             $ "Dropping message from unknown peer: " ++ show source
     R ((key, request), respond) ->
+      {- TODO distribute requests evenly accross the participating peers. -}
       case minView (C.findPartition key cluster) of
         Nothing ->
           $(logError) . pack
@@ -535,7 +536,6 @@ instance (Show i, Show s) => ToJSON (NodeState i o s) where
     object [
         "self" .= show self,
         "cluster" .= cluster,
-        -- "forwarded" .= show <$> Map.keys (unF forwarded),
         "forwarded" .= [show k | k <- Map.keys (unF forwarded)],
         "propStates" .= show propStates,
         "migration" .= show migration,

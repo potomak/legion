@@ -19,9 +19,7 @@ import Data.Ranged (DiscreteOrdered(adjacent, adjacentBelow))
 import Data.Word (Word64)
 
 
-{- |
-  This is how partitions are identified and referenced.
--}
+{- | This is how partitions are identified and referenced. -}
 newtype PartitionKey = K {unkey :: Word256} deriving (Eq, Ord, Show, Bounded)
 
 instance Binary PartitionKey where
@@ -35,9 +33,7 @@ instance DiscreteOrdered PartitionKey where
   adjacentBelow (K k) = if k == minBound then Nothing else Just (K (pred k))
 
 
-{- |
-  Convert a `PartitionKey` into a hex string
--}
+{- | Convert a `PartitionKey` into a hex string. -}
 toHex :: PartitionKey -> String
 toHex (K (Word256 (Word128 a b) (Word128 c d))) =
   concatMap toHex64 [a, b, c, d]
@@ -76,9 +72,7 @@ toHex64 w = fmap (digit . quad) [15, 14..0]
         (True,  True,  True,  True)  -> 'f'
 
 
-{- |
-  Maybe convert a hex string into a partition key
--}
+{- | Maybe convert a hex string into a partition key -}
 fromHex :: String -> Either String PartitionKey
 fromHex str
     | length str > 64 =
