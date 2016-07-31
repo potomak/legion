@@ -535,7 +535,7 @@ instance (Show i, Show s) => ToJSON (NodeState i o s) where
         "self" .= show self,
         "cluster" .= cluster,
         "forwarded" .= [show k | k <- Map.keys (unF forwarded)],
-        "propStates" .= show propStates,
+        "propStates" .= Map.mapKeys show propStates,
         "migration" .= show migration,
         "nextId" .= show nextId
       ]

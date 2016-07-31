@@ -22,6 +22,7 @@ module Network.Legion.PartitionState (
   complete,
 ) where
 
+import Data.Aeson (ToJSON)
 import Data.Binary (Binary)
 import Data.Default.Class (Default)
 import Data.Set (Set)
@@ -53,7 +54,7 @@ newtype PartitionPowerState i s = PartitionPowerState {
 -}
 newtype PartitionPropState i s = PartitionPropState {
     unPropState :: PropState PartitionKey s Peer i
-  } deriving (Eq, Show)
+  } deriving (Eq, Show, ToJSON)
 
 
 -- {- |

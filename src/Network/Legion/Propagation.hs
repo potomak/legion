@@ -71,7 +71,7 @@ data PropState o s p d = PropState {
           self :: p,
            now :: Time
   } deriving (Eq, Show)
-instance (Show o, ToJSON s, Show p, Show d) => ToJSON (PropState o s p d) where
+instance (Show o, Show s, Show p, Show d) => ToJSON (PropState o s p d) where
   toJSON PropState {powerState, peerStates, self, now} = object [
       "powerState" .= powerState,
       "peerStates" .= Map.fromList [
