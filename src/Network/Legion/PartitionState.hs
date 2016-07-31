@@ -19,6 +19,7 @@ module Network.Legion.PartitionState (
   projParticipants,
   projected,
   infimum,
+  complete,
 ) where
 
 import Data.Binary (Binary)
@@ -178,5 +179,15 @@ projected = P.projected . unPowerState
 -}
 infimum :: PartitionPowerState i s -> s
 infimum = P.infimum . unPowerState
+
+
+{- |
+  Figure out if this propagation state has any work to do. Return 'True' if all
+  known propagation work has been completed. The implication here is that the
+  only way more work can happen is if new deltas are applied, either directly
+  or via a merge.
+-}
+complete :: PartitionPropState i s -> Bool
+complete = P.complete . unPropState
 
 
