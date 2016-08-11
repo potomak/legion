@@ -182,7 +182,7 @@ startPeerListener LegionarySettings {peerBindAddr} =
             let runSocket =
                   sourceSocket conn
                   =$= conduitDecode
-                  $$  msgSink
+                  $$ msgSink
             void
               . lift
               . forkIO

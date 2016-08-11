@@ -141,38 +141,6 @@ rebalanceAction self allPeers (D dist) =
 
     weightOf p = sum [KS.size ks | (ks, ps) <- dist, p `Set.member` ps]
 
---     -- TODO: first figure out if any replicas need re-building.
---     case sortBy (weight `on` snd) (toList dist) of
---       (p, keyspace):remaining | p == peer ->
---         case reverse remaining of
---           [] -> Nothing
---           (target, targetSpace):_ ->
---             let
---                 {- |
---                   Keys that already exist at the target are not eligible
---                   for being moved.
---                 -}
---                 eligibleSpace = keyspace \\ targetSpace
---                 migrationSize = (size keyspace - size targetSpace) `div` 2
---                 migrants = pickMigrants migrationSize eligibleSpace
---             in
---             case migrants of
---               Just keys -> Just (Move target keys)
---               Nothing -> Nothing
---       _ -> Nothing
---   where
---     weight
---       :: KeySet
---       -> KeySet
---       -> Ordering
---     weight = flip compare `on` size
--- 
---     pickMigrants :: Integer -> KeySet -> Maybe KeySet
---     pickMigrants n keyspace =
---       let migrants = take n keyspace in
---       if size migrants > 0
---         then Just migrants
---         else Nothing 
 
 
 {- |

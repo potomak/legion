@@ -126,6 +126,7 @@ handleMessage l msg = do
           $(logWarn) . pack
             $ "Dropping message from unknown peer: " ++ show source
     R ((key, request), respond) ->
+      {- TODO distribute requests evenly accross the participating peers. -}
       case minView (C.findPartition key cluster) of
         Nothing ->
           $(logError) . pack
@@ -158,8 +159,6 @@ handlePeerMessage -- PartitionMerge
       (getStateL persistence self cluster key)
       return
       (lookup key propStates)
-    let
-      owners = C.findPartition key cluster
     case P.mergeEither source ps propState of
       Left err ->
         $(logWarn) . pack
@@ -173,7 +172,7 @@ handlePeerMessage -- PartitionMerge
               else Nothing
           )
         putS nodeState {
-            propStates = if newPropState == P.new key self owners
+            propStates = if P.complete newPropState
               then Map.delete key propStates
               else insert key newPropState propStates
           }
@@ -385,7 +384,7 @@ migrate Legionary{persistence} = do
 -}
 propagate :: (LegionConstraints i o s) => StateM i o s ()
 propagate = do
-    ns@NodeState {cluster, propStates, self} <- getS
+    ns@NodeState {cluster, propStates} <- getS
     let (peers, ps, cluster2) = C.actions cluster
     $(logDebug) . pack $ "Cluster Actions: " ++ show (peers, ps)
     mapM_ (doClusterAction ps) (Set.toList peers)
@@ -395,7 +394,7 @@ propagate = do
         propStates = Map.fromAscList [
             (k, p)
             | (k, p) <- propStates2
-            , p /= P.initProp self (P.getPowerState p)
+            , not (P.complete p)
           ]
       }
   where
@@ -535,9 +534,8 @@ instance (Show i, Show s) => ToJSON (NodeState i o s) where
     object [
         "self" .= show self,
         "cluster" .= cluster,
-        -- "forwarded" .= show <$> Map.keys (unF forwarded),
         "forwarded" .= [show k | k <- Map.keys (unF forwarded)],
-        "propStates" .= show propStates,
+        "propStates" .= Map.mapKeys show propStates,
         "migration" .= show migration,
         "nextId" .= show nextId
       ]

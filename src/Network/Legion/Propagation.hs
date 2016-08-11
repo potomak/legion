@@ -27,6 +27,7 @@ module Network.Legion.Propagation (
   projParticipants,
   projected,
   infimum,
+  complete,
 ) where
 
 import Prelude hiding (lookup)
@@ -70,7 +71,7 @@ data PropState o s p d = PropState {
           self :: p,
            now :: Time
   } deriving (Eq, Show)
-instance (Show o, ToJSON s, Show p, Show d) => ToJSON (PropState o s p d) where
+instance (Show o, Show s, Show p, Show d) => ToJSON (PropState o s p d) where
   toJSON PropState {powerState, peerStates, self, now} = object [
       "powerState" .= powerState,
       "peerStates" .= Map.fromList [
@@ -376,5 +377,16 @@ projected = PS.projectedValue . unPowerState
 -}
 infimum :: PropPowerState o s p d -> s
 infimum = PS.infimumValue . unPowerState
+
+
+{- |
+  Figure out if this propagation state has any work to do. Return 'True' if all
+  known propagation work has been completed. The implication here is that the
+  only way more work can happen is if new deltas are applied, either directly
+  or via a merge.
+-}
+complete :: (Ord p) => PropState o s p d -> Bool
+complete PropState {powerState, peerStates} =
+  Map.null peerStates && Set.null (divergent powerState)
 
 
