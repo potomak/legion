@@ -7,6 +7,7 @@
 -}
 module Network.Legion.Admin (
   runAdmin,
+  AdminMessage(..),
 ) where
 
 import Canteven.HTTP (requestLogging, logExceptionsAndContinue)
@@ -23,10 +24,11 @@ import Data.Version (showVersion)
 import Network.HTTP.Types (notFound404)
 import Network.Legion.Application (LegionConstraints)
 import Network.Legion.Conduit (chanToSource)
+import Network.Legion.Distribution (Peer)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey(K))
-import Network.Legion.StateMachine (AdminMessage(GetState, GetPart,
-  Eject))
+import Network.Legion.PartitionState (PartitionPowerState)
+import Network.Legion.StateMachine (NodeState)
 import Network.Wai (Middleware, modifyResponse)
 import Network.Wai.Handler.Warp (HostPreference, defaultSettings, Port,
   setHost, setPort)
@@ -120,4 +122,19 @@ setServer = addServerHeader . stripServerHeader
     -}
     serverValue =
       encodeUtf8 (T.pack ("legion-admin/" ++ showVersion version))
+
+
+{- |
+  The type of messages sent by the admin service.
+-}
+data AdminMessage i o s
+  = GetState (NodeState i s -> LIO ())
+  | GetPart PartitionKey (Maybe (PartitionPowerState i s) -> LIO ())
+  | Eject Peer (() -> LIO ())
+
+instance Show (AdminMessage i o s) where
+  show (GetState _) = "(GetState _)"
+  show (GetPart k _) = "(GetPart " ++ show k ++ " _)"
+  show (Eject p _) = "(Eject " ++ show p ++ " _)"
+
 

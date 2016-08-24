@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
@@ -17,37 +18,42 @@ module Network.Legion.Runtime (
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Chan (writeChan, newChan, Chan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
-import Control.Monad (void, forever, join)
+import Control.Monad (void, forever, join, (>=>))
 import Control.Monad.Catch (catchAll, try, SomeException, throwM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Logger (logWarn, logError, logInfo, LoggingT,
-  MonadLoggerIO, runLoggingT, askLoggerIO)
+  MonadLoggerIO, runLoggingT, askLoggerIO, logDebug)
 import Control.Monad.Trans.Class (lift)
-import Data.Binary (encode)
+import Data.Binary (encode, Binary)
 import Data.Conduit (Source, ($$), (=$=), yield, await, awaitForever,
-  transPipe, ConduitM, runConduit)
+  transPipe, ConduitM, runConduit, Sink)
 import Data.Conduit.Network (sourceSocket)
 import Data.Conduit.Serialization.Binary (conduitDecode)
 import Data.Map (Map)
 import Data.Text (pack)
-import Network.Legion.Admin (runAdmin)
-import Network.Legion.Application (LegionConstraints, Legionary,
-  RequestMsg)
+import GHC.Generics (Generic)
+import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
+  Eject))
+import Network.Legion.Application (LegionConstraints,
+  Legionary(Legionary), RequestMsg, persistence, getState)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
-import Network.Legion.ConnectionManager (newConnectionManager, send,
-  newPeers)
 import Network.Legion.Distribution (Peer, newPeer)
 import Network.Legion.Fork (forkC)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
+import Network.Legion.Runtime.ConnectionManager (newConnectionManager,
+  send, ConnectionManager, newPeers)
+import Network.Legion.Runtime.PeerMessage (PeerMessage(PeerMessage),
+  PeerMessagePayload(ForwardRequest, ForwardResponse, ClusterMerge,
+  PartitionMerge), MessageId, newSequence, next)
 import Network.Legion.Settings (LegionarySettings(LegionarySettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
-import Network.Legion.StateMachine (stateMachine, LInput(J, P, R,
-  A), JoinRequest(JoinRequest), JoinResponse(JoinOk, JoinRejected),
-  LOutput(Send, NewPeers), AdminMessage, NodeState, PeerMessage,
-  newNodeState)
+import Network.Legion.StateMachine (partitionMerge, clusterMerge,
+  NodeState, newNodeState, runSM, UserResponse(Forward, Respond),
+  userRequest, heartbeat, rebalance, migrate, propagate, ClusterAction,
+  eject)
 import Network.Legion.UUID (getUUID)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
@@ -55,7 +61,9 @@ import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SockAddrInet6, SockAddrUnix, SockAddrCan), connect, getPeerName, Socket)
 import Network.Socket.ByteString.Lazy (sendAll)
 import qualified Data.Conduit.List as CL
+import qualified Data.Map as Map
 import qualified Network.Legion.ClusterState as C
+import qualified Network.Legion.StateMachine as SM
 
 
 {- |
@@ -70,17 +78,17 @@ import qualified Network.Legion.ClusterState as C
 -}
 runLegionary :: (LegionConstraints i o s)
   => Legionary i o s
-    -- ^ The user-defined legion application to run.
+    {- ^ The user-defined legion application to run.  -}
   -> LegionarySettings
-    -- ^ Settings and configuration of the legionary framework.
+    {- ^ Settings and configuration of the legionary framework.  -}
   -> StartupMode
   -> Source IO (RequestMsg i o)
-    -- ^ A source of requests, together with a way to respond to the requets.
-    {-
-      We don't use `LIO` in the type signature here because we don't
-      export the `LIO` symbol.
-    -}
+    {- ^ A source of requests, together with a way to respond to the requets. -}
   -> LoggingT IO ()
+    {-
+      Don't expose 'LIO' here because 'LIO' is a strictly internal
+      symbol. 'LoggingT IO' is what we expose to the world.
+    -}
 
 runLegionary
     legionary
@@ -88,31 +96,36 @@ runLegionary
     startupMode
     requestSource
   = do
+    {- Start the various messages sources.  -}
     peerS <- loggingC =<< startPeerListener settings
-    (nodeState, peers) <- makeNodeState settings startupMode
-    cm <- newConnectionManager peers
-    $(logInfo) . pack
-      $ "The initial node state is: " ++ show nodeState
     adminS <- loggingC =<< runAdmin adminPort adminHost
     joinS <- loggingC (joinMsgSource settings)
+
+    (self, nodeState, peers) <- makeNodeState settings startupMode
+    cm <- newConnectionManager peers
+
+    firstMessageId <- newSequence
+    let
+      rts = RuntimeState {
+          forwarded = Map.empty,
+          nextId = firstMessageId,
+          cm,
+          self
+        }
     runConduit $
       (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
         =$= CL.map toMessage
-        =$= stateMachine legionary nodeState
-        =$= handleOutput cm
+        =$= messageSink legionary (rts, nodeState)
   where
-    handleOutput cm = awaitForever (lift . \case
-        Send peer message -> send cm peer message
-        NewPeers peers -> newPeers cm peers
-      )
-
     toMessage
       :: Either
           (JoinRequest, JoinResponse -> LIO ())
           (Either
             (PeerMessage i o s)
-            (Either (RequestMsg i o) (AdminMessage i o s)))
-      -> LInput i o s
+            (Either
+              (RequestMsg i o)
+              (AdminMessage i o s)))
+      -> RuntimeMessage i o s
     toMessage (Left m) = J m
     toMessage (Right (Left m)) = P m
     toMessage (Right (Right (Left m))) = R m
@@ -128,16 +141,228 @@ runLegionary
       return (transPipe (`runLoggingT` logging) c)
 
 
-{- | This defines the various ways a node can be spun up.  -}
+messageSink :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> (RuntimeState i o s, NodeState i s)
+  -> Sink (RuntimeMessage i o s) LIO ()
+messageSink legionary states =
+    await >>= \case
+      Nothing -> return ()
+      Just msg -> do
+        $(logDebug) . pack
+          $ "Receieved: " ++ show msg
+        lift . handleMessage legionary msg
+          >=> lift . updatePeers legionary
+          >=> lift . clusterHousekeeping legionary
+          >=> messageSink legionary
+          $ states
+
+
+{- |
+  Make sure the connection manager knows about any new peers that have
+  joined the cluster.
+-}
+updatePeers
+  :: Legionary i o s
+  -> (RuntimeState i o s, NodeState i s)
+  -> LIO (RuntimeState i o s, NodeState i s)
+updatePeers legionary (rts, ns) = do
+  (peers, ns2) <- runSM legionary ns SM.getPeers
+  newPeers (cm rts) peers
+  return (rts, ns2)
+
+
+{- |
+  Perform any cluster management actions, and update the state
+  appropriately.
+-}
+clusterHousekeeping :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> (RuntimeState i o s, NodeState i s)
+  -> LIO (RuntimeState i o s, NodeState i s)
+clusterHousekeeping legionary (rts, ns) = do
+    (actions, ns2) <- runSM legionary ns (
+        heartbeat
+        >> rebalance
+        >> migrate
+        >> propagate
+      )
+    rts2 <- foldr (>=>) return (clusterAction <$> actions) rts
+    return (rts2, ns2)
+
+
+{- |
+  Actually perform a cluster action as directed by the state
+  machine.
+-}
+clusterAction
+  :: ClusterAction i s
+  -> RuntimeState i o s
+  -> LIO (RuntimeState i o s)
+
+clusterAction
+    (SM.ClusterMerge peer ps)
+    rts@RuntimeState {self, nextId, cm}
+  = do
+    send cm peer (PeerMessage self nextId (ClusterMerge ps))
+    return rts {nextId = next nextId}
+
+clusterAction
+    (SM.PartitionMerge peer key ps)
+    rts@RuntimeState {self, nextId, cm}
+  = do
+    send cm peer (PeerMessage self nextId (PartitionMerge key ps))
+    return rts {nextId = next nextId}
+
+
+{- |
+  Handle an individual runtime message, accepting an initial runtime
+  state and an initial node state, and producing an updated runtime
+  state and node state.
+-}
+handleMessage :: (LegionConstraints i o s)
+  => Legionary i o s
+  -> RuntimeMessage i o s
+  -> (RuntimeState i o s, NodeState i s)
+  -> LIO (RuntimeState i o s, NodeState i s)
+
+handleMessage {- Partition Merge -}
+    legionary
+    (P (PeerMessage source _ (PartitionMerge key ps)))
+    (rts, ns)
+  = do
+    ((), ns2) <- runSM legionary ns (partitionMerge source key ps)
+    return (rts, ns2)
+  
+handleMessage {- Cluster Merge -}
+    legionary
+    (P (PeerMessage source _ (ClusterMerge cs)))
+    (rts, ns)
+  = do
+    ((), ns2) <- runSM legionary ns (clusterMerge source cs)
+    return (rts, ns2)
+
+handleMessage {- Forward Request -}
+    legionary
+    (P (msg@(PeerMessage source mid (ForwardRequest key request))))
+    (rts@RuntimeState {nextId, cm, self}, ns)
+  = do
+    (output, ns2) <- runSM legionary ns (userRequest key request)
+    case output of
+      Respond response -> do
+        send cm source (
+            PeerMessage self nextId (ForwardResponse mid response)
+          )
+        return (rts {nextId = next nextId}, ns2)
+      Forward peer -> do
+        send cm peer msg
+        return (rts {nextId = next nextId}, ns2)
+    
+handleMessage {- Forward Response -}
+    _legionary
+    (msg@(P (PeerMessage _ _ (ForwardResponse mid response))))
+    (rts, ns)
+  =
+    case lookupDelete mid (forwarded rts) of
+      (Nothing, fwd) -> do
+        $(logWarn) . pack $ "Unsolicited ForwardResponse: " ++ show msg
+        return (rts {forwarded = fwd}, ns)
+      (Just respond, fwd) -> do
+        respond response
+        return (rts {forwarded = fwd}, ns)
+
+handleMessage {- User Request -}
+    legionary
+    (R ((key, request), respond))
+    (rts@RuntimeState {self, cm, nextId, forwarded}, ns)
+  = do
+    (output, ns2) <- runSM legionary ns (userRequest key request)
+    case output of
+      Respond response -> do
+        lift (respond response)
+        return (rts, ns2)
+      Forward peer -> do
+        send cm peer (
+            PeerMessage self nextId (ForwardRequest key request)
+          )
+        return (
+            rts {
+              forwarded = Map.insert nextId (lift . respond) forwarded,
+              nextId = next nextId
+            },
+            ns2
+          )
+
+handleMessage {- Join Request -}
+    legionary
+    (J (JoinRequest addy, respond))
+    (rts, ns)
+  = do
+    ((peer, cluster), ns2) <- runSM legionary ns (SM.join addy)
+    respond (JoinOk peer cluster)
+    return (rts, ns2)
+
+handleMessage {- Admin Get State -}
+    _legionary
+    (A (GetState respond))
+    (rts, ns)
+  =
+    respond ns >> return (rts, ns)
+
+handleMessage {- Admin Get Partition -}
+    Legionary {persistence}
+    (A (GetPart key respond))
+    (rts, ns)
+  = do
+    respond =<< lift (getState persistence key)
+    return (rts, ns)
+
+handleMessage {- Admin Eject Peer -}
+    legionary
+    (A (Eject peer respond))
+    (rts, ns)
+  = do
+    {-
+      TODO: we should attempt to notify the ejected peer that it has
+      been ejected instead of just cutting it off and washing our hands
+      of it. I have a vague notion that maybe ejected peers should be
+      permanently recorded in the cluster state so that if they ever
+      reconnect then we can notify them that they are no longer welcome
+      to participate.
+
+      On a related note, we need to think very hard about the split brain
+      problem. A random thought about that is that we should consider the
+      extreme case where the network just fails completely and every node
+      believes that every other node should be or has been ejected. This
+      would obviously be catastrophic in terms of data durability unless
+      we have some way to reintegrate an ejected node. So, either we
+      have to guarantee that such a situation can never happen, or else
+      implement a reintegration strategy.  It might be acceptable for
+      the reintegration strategy to be very costly if it is characterized
+      as an extreme recovery scenario.
+
+      Question: would a reintegration strategy become less costly if the
+      "next state id" for a peer were global across all power states
+      instead of local to each power state?
+    -}
+    ((), ns2) <- runSM legionary ns (eject peer)
+    respond ()
+    return (rts, ns2)
+
+
+{- | This defines the various ways a node can be spun up. -}
 data StartupMode
   = NewCluster
-    -- ^ Indicates that we should bootstrap a new cluster at startup. The
-    --   persistence layer may be safely pre-populated because the new
-    --   node will claim the entire keyspace. 
+    {- ^
+      Indicates that we should bootstrap a new cluster at startup. The
+      persistence layer may be safely pre-populated because the new node
+      will claim the entire keyspace.
+    -}
   | JoinCluster SockAddr
-    -- ^ Indicates that the node should try to join an existing cluster,
-    --   either by starting fresh, or by recovering from a shutdown
-    --   or crash.
+    {- ^
+      Indicates that the node should try to join an existing cluster,
+      either by starting fresh, or by recovering from a shutdown or crash.
+    -}
   deriving (Show, Eq)
 
 
@@ -210,18 +435,19 @@ startPeerListener LegionarySettings {peerBindAddr} =
 
 
 {- | Figure out how to construct the initial node state.  -}
-makeNodeState :: (LegionConstraints i o s)
+makeNodeState :: (Show i)
   => LegionarySettings
   -> StartupMode
-  -> LIO (NodeState i o s, Map Peer BSockAddr)
+  -> LIO (Peer, NodeState i s, Map Peer BSockAddr)
 
 makeNodeState LegionarySettings {peerBindAddr} NewCluster = do
   {- Build a brand new node state, for the first node in a cluster. -}
   self <- newPeer
   clusterId <- getUUID
-  let cluster = C.new clusterId self peerBindAddr
-  nodeState <- newNodeState self cluster
-  return (nodeState, C.getPeers cluster)
+  let
+    cluster = C.new clusterId self peerBindAddr
+    nodeState = newNodeState self cluster
+  return (self, nodeState, C.getPeers cluster)
 
 makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
     {-
@@ -230,9 +456,10 @@ makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
     -}
     $(logInfo) "Trying to join an existing cluster."
     (self, clusterPS) <- joinCluster (JoinRequest (BSockAddr peerBindAddr))
-    let cluster = C.initProp self clusterPS
-    nodeState <- newNodeState self cluster
-    return (nodeState, C.getPeers cluster)
+    let
+      cluster = C.initProp self clusterPS
+      nodeState = newNodeState self cluster
+    return (self, nodeState, C.getPeers cluster)
   where
     joinCluster :: JoinRequest -> LIO (Peer, ClusterPowerState)
     joinCluster joinMsg = liftIO $ do
@@ -320,7 +547,7 @@ joinMsgSource LegionarySettings {joinBindAddr} = join . lift $
           )
 
 
-{- | Guess the family of a `SockAddr`.  -}
+{- | Guess the family of a `SockAddr`. -}
 fam :: SockAddr -> Family
 fam SockAddrInet {} = AF_INET
 fam SockAddrInet6 {} = AF_INET6
@@ -351,5 +578,46 @@ forkLegionary legionary settings startupMode = do
         writeChan chan ((key, request), putMVar responseVar)
         takeMVar responseVar
       )
+
+
+{- | This is the type of message passed around in the runtime. -}
+data RuntimeMessage i o s
+  = P (PeerMessage i o s)
+  | R (RequestMsg i o)
+  | J (JoinRequest, JoinResponse -> LIO ())
+  | A (AdminMessage i o s)
+instance (Show i, Show o, Show s) => Show (RuntimeMessage i o s) where
+  show (P m) = "(P " ++ show m ++ ")"
+  show (R ((p, i), _)) = "(R ((" ++ show p ++ ", " ++ show i ++ "), _))"
+  show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
+  show (A a) = "(A (" ++ show a ++ "))"
+
+
+{- | The runtime state. -}
+data RuntimeState i o s = RuntimeState {
+         self :: Peer,
+    forwarded :: Map MessageId (o -> LIO ()),
+       nextId :: MessageId,
+           cm :: ConnectionManager i o s
+  }
+
+
+{- | This is the type of a join request message. -}
+data JoinRequest = JoinRequest BSockAddr
+  deriving (Generic, Show)
+instance Binary JoinRequest
+
+
+{- | The response to a JoinRequst message -}
+data JoinResponse
+  = JoinOk Peer ClusterPowerState
+  | JoinRejected String
+  deriving (Generic)
+instance Binary JoinResponse
+
+
+{- | Lookup a key from a map, and also delete the key if it exists. -}
+lookupDelete :: (Ord k) => k -> Map k v -> (Maybe v, Map k v)
+lookupDelete = Map.updateLookupWithKey (const (const Nothing))
 
 

@@ -11,9 +11,7 @@ import Network.Socket (SockAddr(SockAddrInet, SockAddrInet6, SockAddrUnix,
   SockAddrCan))
 
 
-{- |
-  A type useful only for creating a `Binary` instance of `SockAddr`.
--}
+{- | A type useful only for creating a `Binary` instance of `SockAddr`.  -}
 newtype BSockAddr = BSockAddr {getAddr :: SockAddr} deriving (Show, Eq)
 
 instance Binary BSockAddr where
@@ -48,6 +46,5 @@ instance Binary BSockAddr where
           $ "Can't decode BSockAddr because the constructor tag "
           ++ "was not understood. Probably this data is representing "
           ++ "something else."
-
 
 
