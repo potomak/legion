@@ -5,7 +5,7 @@
 {- |
   This module manages connections to other nodes in the cluster.
 -}
-module Network.Legion.ConnectionManager (
+module Network.Legion.Runtime.ConnectionManager (
   ConnectionManager,
   newConnectionManager,
   send,
@@ -27,7 +27,7 @@ import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.Distribution (Peer)
 import Network.Legion.Fork (forkC)
 import Network.Legion.LIO (LIO)
-import Network.Legion.StateMachine (PeerMessage)
+import Network.Legion.Runtime.PeerMessage (PeerMessage)
 import Network.Socket (SockAddr, Socket, socket, SocketType(Stream),
   defaultProtocol, connect, close, SockAddr(SockAddrInet, SockAddrInet6,
   SockAddrUnix, SockAddrCan), Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN))

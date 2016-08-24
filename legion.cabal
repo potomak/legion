@@ -31,7 +31,6 @@ library
     Network.Legion.Basics
     Network.Legion.ClusterState
     Network.Legion.Conduit
-    Network.Legion.ConnectionManager
     Network.Legion.Distribution
     Network.Legion.Fork
     Network.Legion.KeySet
@@ -41,6 +40,8 @@ library
     Network.Legion.PowerState
     Network.Legion.Propagation
     Network.Legion.Runtime
+    Network.Legion.Runtime.ConnectionManager
+    Network.Legion.Runtime.PeerMessage
     Network.Legion.Settings
     Network.Legion.StateMachine
     Network.Legion.UUID
@@ -55,6 +56,7 @@ library
     binary-conduit >= 1.2.3 && < 1.3,
     bytestring >= 0.10.4.0 && < 0.11,
     canteven-http >= 0.1.1.1 && < 0.2,
+    canteven-log >= 1.0.0.0 && < 1.1,
     conduit >= 1.2.4 && < 1.3,
     conduit-extra >= 1.1.9 && < 1.2,
     containers >= 0.5.5.1 && < 0.6,
