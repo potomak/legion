@@ -70,17 +70,17 @@ import qualified Network.Legion.ClusterState as C
 -}
 runLegionary :: (LegionConstraints i o s)
   => Legionary i o s
-    -- ^ The user-defined legion application to run.
+    {- ^ The user-defined legion application to run.  -}
   -> LegionarySettings
-    -- ^ Settings and configuration of the legionary framework.
+    {- ^ Settings and configuration of the legionary framework.  -}
   -> StartupMode
   -> Source IO (RequestMsg i o)
-    -- ^ A source of requests, together with a way to respond to the requets.
-    {-
-      We don't use `LIO` in the type signature here because we don't
-      export the `LIO` symbol.
-    -}
+    {- ^ A source of requests, together with a way to respond to the requets. -}
   -> LoggingT IO ()
+    {-
+      Don't expose 'LIO' here because 'LIO' is a strictly internal
+      symbol. 'LoggingT IO' is what we expose to the world.
+    -}
 
 runLegionary
     legionary
@@ -128,16 +128,19 @@ runLegionary
       return (transPipe (`runLoggingT` logging) c)
 
 
-{- | This defines the various ways a node can be spun up.  -}
+{- | This defines the various ways a node can be spun up. -}
 data StartupMode
   = NewCluster
-    -- ^ Indicates that we should bootstrap a new cluster at startup. The
-    --   persistence layer may be safely pre-populated because the new
-    --   node will claim the entire keyspace. 
+    {- ^
+      Indicates that we should bootstrap a new cluster at startup. The
+      persistence layer may be safely pre-populated because the new node
+      will claim the entire keyspace.
+    -}
   | JoinCluster SockAddr
-    -- ^ Indicates that the node should try to join an existing cluster,
-    --   either by starting fresh, or by recovering from a shutdown
-    --   or crash.
+    {- ^
+      Indicates that the node should try to join an existing cluster,
+      either by starting fresh, or by recovering from a shutdown or crash.
+    -}
   deriving (Show, Eq)
 
 
@@ -219,7 +222,8 @@ makeNodeState LegionarySettings {peerBindAddr} NewCluster = do
   {- Build a brand new node state, for the first node in a cluster. -}
   self <- newPeer
   clusterId <- getUUID
-  let cluster = C.new clusterId self peerBindAddr
+  let
+    cluster = C.new clusterId self peerBindAddr
   nodeState <- newNodeState self cluster
   return (nodeState, C.getPeers cluster)
 
@@ -230,7 +234,8 @@ makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
     -}
     $(logInfo) "Trying to join an existing cluster."
     (self, clusterPS) <- joinCluster (JoinRequest (BSockAddr peerBindAddr))
-    let cluster = C.initProp self clusterPS
+    let
+      cluster = C.initProp self clusterPS
     nodeState <- newNodeState self cluster
     return (nodeState, C.getPeers cluster)
   where
@@ -320,7 +325,7 @@ joinMsgSource LegionarySettings {joinBindAddr} = join . lift $
           )
 
 
-{- | Guess the family of a `SockAddr`.  -}
+{- | Guess the family of a `SockAddr`. -}
 fam :: SockAddr -> Family
 fam SockAddrInet {} = AF_INET
 fam SockAddrInet6 {} = AF_INET6
