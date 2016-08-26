@@ -9,4 +9,4 @@ extra-deps:
 - data-bword-0.1.0.1
 - data-dword-0.3.1
 - scotty-resource-0.1.1.0
-resolver: lts-6.7
+resolver: lts-6.13
