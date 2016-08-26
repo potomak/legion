@@ -56,7 +56,7 @@ import Network.Legion.StateMachine (partitionMerge, clusterMerge,
   eject)
 import Network.Legion.UUID (getUUID)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
-  SocketOption(ReuseAddr), SocketType(Stream), accept, bindSocket,
+  SocketOption(ReuseAddr), SocketType(Stream), accept, bind,
   defaultProtocol, listen, setSocketOption, socket, SockAddr(SockAddrInet,
   SockAddrInet6, SockAddrUnix, SockAddrCan), connect, getPeerName, Socket)
 import Network.Socket.ByteString.Lazy (sendAll)
@@ -382,7 +382,7 @@ startPeerListener LegionarySettings {peerBindAddr} =
           inputChan <- newChan
           so <- socket (fam peerBindAddr) Stream defaultProtocol
           setSocketOption so ReuseAddr 1
-          bindSocket so peerBindAddr
+          bind so peerBindAddr
           listen so 5
           return (inputChan, so)
         forkC "peer socket acceptor" $ acceptLoop so inputChan
@@ -495,7 +495,7 @@ joinMsgSource LegionarySettings {joinBindAddr} = join . lift $
           chan <- newChan
           so <- socket (fam joinBindAddr) Stream defaultProtocol
           setSocketOption so ReuseAddr 1
-          bindSocket so joinBindAddr
+          bind so joinBindAddr
           listen so 5
           return (chan, so)
         forkC "join socket acceptor" $ acceptLoop so chan
