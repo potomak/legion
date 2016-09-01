@@ -20,7 +20,7 @@ import Control.Concurrent.Chan (writeChan, newChan, Chan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
 import Control.Monad (void, forever, join, (>=>))
 import Control.Monad.Catch (catchAll, try, SomeException, throwM)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (logWarn, logError, logInfo, LoggingT,
   MonadLoggerIO, runLoggingT, askLoggerIO, logDebug)
 import Control.Monad.Trans.Class (lift)
@@ -559,13 +559,13 @@ fam SockAddrCan {} = AF_CAN
   Forks the legion framework in a background thread, and returns a way to
   send user requests to it and retrieve the responses to those requests.
 -}
-forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
+forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io, MonadIO io2)
   => Legionary i o s
     {- ^ The user-defined legion application to run. -}
   -> LegionarySettings
     {- ^ Settings and configuration of the legionary framework. -}
   -> StartupMode
-  -> io (PartitionKey -> i -> IO o)
+  -> io (PartitionKey -> i -> io2 o)
 
 forkLegionary legionary settings startupMode = do
   logging <- askLoggerIO
@@ -573,7 +573,7 @@ forkLegionary legionary settings startupMode = do
     chan <- liftIO newChan
     forkC "main legion thread" $
       runLegionary legionary settings startupMode (chanToSource chan)
-    return (\ key request -> do
+    return (\ key request -> liftIO $ do
         responseVar <- newEmptyMVar
         writeChan chan ((key, request), putMVar responseVar)
         takeMVar responseVar
