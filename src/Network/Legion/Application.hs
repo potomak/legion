@@ -1,4 +1,4 @@
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ConstraintKinds #-}
 {- |
   This module contains the data types necessary for implementing the
   user application.
@@ -26,10 +26,10 @@ import Network.Legion.PowerState (ApplyDelta)
   >   Show o, Show s, Eq i
   > )
 -}
-class (
+type LegionConstraints i o s = (
     ApplyDelta i s, Default s, Binary i, Binary o, Binary s, Show i,
     Show o, Show s, Eq i
-  ) => LegionConstraints i o s where
+  )
 
 
 {- |
