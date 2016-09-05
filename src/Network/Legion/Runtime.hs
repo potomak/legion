@@ -148,7 +148,10 @@ runLegionary
   which the request is directed, and a way for the framework to deliver the
   response to some interested party.
 -}
-type RequestMsg i o = ((PartitionKey, i), o -> IO ())
+data RequestMsg i o
+  = Request PartitionKey i (o -> IO ())
+instance (Show i) => Show (RequestMsg i o) where
+  show (Request k i _) = "(Request " ++ show k ++ " " ++ show i ++ " _)"
 
 
 messageSink :: (LegionConstraints i o s)
@@ -283,7 +286,7 @@ handleMessage {- Forward Response -}
 
 handleMessage {- User Request -}
     legionary
-    (R ((key, request), respond))
+    (R (Request key request respond))
     (rts@RuntimeState {self, cm, nextId, forwarded}, ns)
   = do
     (output, ns2) <- runSM legionary ns (userRequest key request)
@@ -586,7 +589,7 @@ forkLegionary legionary settings startupMode = do
     return Runtime {
         rtMakeRequest = \key request -> liftIO $ do
           responseVar <- newEmptyMVar
-          writeChan chan ((key, request), putMVar responseVar)
+          writeChan chan (Request key request (putMVar responseVar))
           takeMVar responseVar
       }
 
@@ -620,7 +623,7 @@ data RuntimeMessage i o s
   | A (AdminMessage i o s)
 instance (Show i, Show o, Show s) => Show (RuntimeMessage i o s) where
   show (P m) = "(P " ++ show m ++ ")"
-  show (R ((p, i), _)) = "(R ((" ++ show p ++ ", " ++ show i ++ "), _))"
+  show (R m) = "(R " ++ show m ++ ")"
   show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
   show (A a) = "(A (" ++ show a ++ "))"
 
