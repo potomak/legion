@@ -18,11 +18,12 @@ module Network.Legion.Distribution (
 
 import Prelude hiding (null)
 
+import Control.Applicative ((<|>))
 import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary)
 import Data.Function (on)
 import Data.List (sort, sortBy)
-import Data.Set (Set, toList)
+import Data.Set (Set)
 import Data.Text (pack)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
@@ -119,33 +120,91 @@ rebalanceAction
   -> ParticipationDefaults
   -> Maybe RebalanceAction
 rebalanceAction self allPeers (D dist) =
-    rebuild
-    {- TODO rebalance -}
+    case underServed <|> underUtilized <|> overServed of
+      Nothing -> Nothing
+      Just (peer, action)
+        | peer == self -> Just action
+        | otherwise -> Nothing
   where
-    _rebalance :: a
-    _rebalance = error "rebalance undefined"
-    rebuild =
+    {- |
+      Figure out if there are any under-served partitions and also figure
+      out which peer is the best candidate to service them . "Under
+      served" means that the partition isn't replicated enough times.
+    -}
+    underServed :: Maybe (Peer, RebalanceAction)
+    underServed =
       let
         underserved = [
             (ks, ps)
             | (ks, ps) <- dist
             , Set.size ps < 3
-            , not (self `Set.member` ps)
           ]
         mostUnderserved = sortBy (compare `on` Set.size . snd) underserved
       in case mostUnderserved of
         [] -> Nothing
         (ks, ps):_ ->
           let
-            candidateHosts = toList (allPeers Set.\\ ps)
-            bestHosts = sort [(weightOf p, p) | p <- candidateHosts]
+            {- |
+              Any peer that is not currently servicing the keyspace
+              segment is a candidate.
+            -}
+            candidateHosts = Set.toAscList (allPeers Set.\\ ps)
+
+            {- |
+              The best candidate is the one that currently has the
+              least load.
+            -}
+            bestHosts = sort [(load p, p) | p <- candidateHosts]
           in case bestHosts of
-            {- we are the best host -}
-            (_, candidate):_ | candidate == self -> Just (Invite ks)
-            _ -> Nothing
+            (currentLoad, candidate):_ ->
+              {-
+                Don't be too eager to take on too much additional
+                load, because if we take more than our fair share, then
+                the extra is just going to get rebalanced away almost
+                immediately, leading to inefficiency.
+              -}
+              let
+                additionalLoad :: KeySet
+                additionalLoad = KS.take (idealLoad - currentLoad) ks
+              in Just (candidate, Invite additionalLoad)
+            [] ->
+              {-
+                This can happen when there are less than three nodes in
+                the system. Some partitions are under-served, but there
+                are no candidates to service them.
+              -}
+              Nothing
 
-    weightOf p = sum [KS.size ks | (ks, ps) <- dist, p `Set.member` ps]
+    {- |
+      Figure out if there are any partitions being over served and also
+      figure out if we are the best candidate to drop them. "Over served"
+      means that the partition it replicated too many times.
+    -}
+    overServed :: Maybe (Peer, RebalanceAction)
+    overServed =
+      {- TODO overServed undefined -}
+      Nothing
 
+    {- |
+      Figure out if this peer is underutilized with respect to the rest
+      of the cluster and maybe take on some additional load.
+    -}
+    underUtilized :: Maybe (Peer, RebalanceAction)
+    underUtilized =
+      {- TODO underUtilized undefined -}
+      Nothing
+
+    {- | Figure out how much load a peer is servicing.  -}
+    load :: Peer -> Integer
+    load p = sum [KS.size ks | (ks, ps) <- dist, p `Set.member` ps]
+
+    {- | The ideal load for each peer.  -}
+    idealLoad :: Integer
+    idealLoad =
+      let
+        total = KS.size KS.full * 3
+        numPeers = toInteger (Set.size allPeers)
+      in (total `div` numPeers) + 1
 
 
 {- |
