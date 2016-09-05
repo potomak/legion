@@ -232,7 +232,7 @@ mergeEither a b = Left
 {- |
   Record the fact that the participant acknowledges the information
   contained in the powerset. The implication is that the participant
-  **must** base all future operations on the result of this function.
+  __must__ base all future operations on the result of this function.
 -}
 acknowledge :: (ApplyDelta d s, Ord p)
   => p
