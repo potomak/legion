@@ -12,6 +12,8 @@ module Network.Legion.Application (
 import Data.Binary (Binary)
 import Data.Conduit (Source)
 import Data.Default.Class (Default)
+import Data.Set (Set)
+import Network.Legion.Index (Tag)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta)
@@ -52,7 +54,14 @@ data Legionary i o s = Legionary {
     handleRequest :: PartitionKey -> i -> s -> o,
 
     {- | The user-defined persistence layer implementation. -}
-    persistence :: Persistence i s
+    persistence :: Persistence i s,
+
+    {- |
+      A way of indexing partitions so that they can be found without
+      knowing the partition key. An index entry for the partition will be
+      created under each of the tags returned by this function.
+    -}
+    index :: s -> Set Tag
   }
 
 

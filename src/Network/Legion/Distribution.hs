@@ -13,6 +13,7 @@ module Network.Legion.Distribution (
   rebalanceAction,
   RebalanceAction(..),
   newPeer,
+  minimumCompleteServiceSet,
 ) where
 
 import Prelude hiding (null)
@@ -71,6 +72,15 @@ findPartition k d =
       $ "No exact mach for key in distribution. This means there is a bug in "
       ++ "the module `Network.Legion.Distribution`. Please report this bug "
       ++ "via github: " ++ show (k, d)
+
+
+{- | Find a solution to the minimum complete service set. -}
+minimumCompleteServiceSet :: ParticipationDefaults -> Set Peer
+minimumCompleteServiceSet defs = Set.fromList [
+    p
+    | (_, peers) <- unD defs
+    , Just (p, _) <- [Set.minView peers]
+  ]
 
 
 {- |

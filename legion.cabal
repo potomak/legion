@@ -34,6 +34,7 @@ library
     Network.Legion.Conduit
     Network.Legion.Distribution
     Network.Legion.Fork
+    Network.Legion.Index
     Network.Legion.KeySet
     Network.Legion.LIO
     Network.Legion.PartitionKey

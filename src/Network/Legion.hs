@@ -25,16 +25,24 @@
 module Network.Legion (
   -- * Service Implementation
   -- $service-implementaiton
+
+  -- ** Indexing
+  -- $indexing
+
   Legionary(..),
   LegionConstraints,
   Persistence(..),
   ApplyDelta(..),
+  Tag(..),
   -- * Invoking Legion
   -- $invocation
   forkLegionary,
   StartupMode(..),
   Runtime,
   makeRequest,
+  search,
+  SearchTag(..),
+  IndexRecord(..),
   -- * Fundamental Types
   PartitionKey(..),
   PartitionPowerState,
@@ -52,13 +60,15 @@ import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Network.Legion.Application (LegionConstraints,
   Persistence(Persistence, getState, saveState, list),
-  Legionary(Legionary, persistence, handleRequest))
+  Legionary(Legionary, persistence, handleRequest, index))
 import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
+import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
+  irTag, irKey), SearchTag(SearchTag, stTag, stKey))
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
 import Network.Legion.PartitionState (PartitionPowerState, infimum, projected)
 import Network.Legion.PowerState (ApplyDelta(apply))
 import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
-  forkLegionary, Runtime, makeRequest)
+  forkLegionary, Runtime, makeRequest, search)
 import Network.Legion.Settings (LegionarySettings(LegionarySettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 
@@ -157,6 +167,23 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 --
 -- See 'newMemoryPersistence' and 'diskPersistence' if you need to get
 -- started quickly with an in-memory persistence layer.
+
+--------------------------------------------------------------------------------
+
+-- $indexing
+-- Legion gives you a way to index your partitions so that you can find
+-- partitions that have certain characteristics without having to know
+-- the partition key a priori. Conceptually, the "index" is a single,
+-- global, ordered list of 'IndexRecord's. The 'search' function allows
+-- you to scroll forward through this list at will.
+-- 
+-- Each partition may generate zero or more 'IndexRecord's. This
+-- is determined by the 'index' function, which is defined by your
+-- specific Legion application. For each 'Tag' returned by 'index', an
+-- 'IndexRecord' is generated such that:
+-- 
+-- > @IndexRecord {irTag = <your tag>, irKey = <partition key>}@
+-- 
 
 --------------------------------------------------------------------------------
 

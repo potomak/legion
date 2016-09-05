@@ -14,6 +14,7 @@ module Network.Legion.Runtime (
   StartupMode(..),
   Runtime,
   makeRequest,
+  search,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -31,6 +32,7 @@ import Data.Conduit (Source, ($$), (=$=), yield, await, awaitForever,
 import Data.Conduit.Network (sourceSocket)
 import Data.Conduit.Serialization.Binary (conduitDecode)
 import Data.Map (Map)
+import Data.Set (Set)
 import Data.Text (pack)
 import GHC.Generics (Generic)
 import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
@@ -42,19 +44,22 @@ import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
 import Network.Legion.Distribution (Peer, newPeer)
 import Network.Legion.Fork (forkC)
+import Network.Legion.Index (IndexRecord(IndexRecord), irTag, irKey,
+  SearchTag(SearchTag))
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.Runtime.ConnectionManager (newConnectionManager,
   send, ConnectionManager, newPeers)
 import Network.Legion.Runtime.PeerMessage (PeerMessage(PeerMessage),
   PeerMessagePayload(ForwardRequest, ForwardResponse, ClusterMerge,
-  PartitionMerge), MessageId, newSequence, nextMessageId)
+  PartitionMerge, Search, SearchResponse), MessageId, newSequence,
+  nextMessageId)
 import Network.Legion.Settings (LegionarySettings(LegionarySettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 import Network.Legion.StateMachine (partitionMerge, clusterMerge,
   NodeState, newNodeState, runSM, UserResponse(Forward, Respond),
   userRequest, heartbeat, rebalance, migrate, propagate, ClusterAction,
-  eject)
+  eject, minimumCompleteServiceSet)
 import Network.Legion.UUID (getUUID)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bind,
@@ -63,6 +68,7 @@ import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
 import Network.Socket.ByteString.Lazy (sendAll)
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Network.Legion.ClusterState as C
 import qualified Network.Legion.StateMachine as SM
 
@@ -111,7 +117,8 @@ runLegionary
           forwarded = Map.empty,
           nextId = firstMessageId,
           cm,
-          self
+          self,
+          searches = Map.empty
         }
     runConduit $
       (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
@@ -150,8 +157,10 @@ runLegionary
 -}
 data RequestMsg i o
   = Request PartitionKey i (o -> IO ())
+  | SearchDispatch SearchTag (Maybe IndexRecord -> IO ())
 instance (Show i) => Show (RequestMsg i o) where
   show (Request k i _) = "(Request " ++ show k ++ " " ++ show i ++ " _)"
+  show (SearchDispatch s _) = "(SearchDispatch " ++ show s ++ " _)"
 
 
 messageSink :: (LegionConstraints i o s)
@@ -305,6 +314,122 @@ handleMessage {- User Request -}
             },
             ns2
           )
+
+handleMessage {- Search Dispatch -}
+    {-
+      This is where we send out search request to all the appropriate
+      nodes in the cluster.
+    -}
+    legionary
+    (R (SearchDispatch searchTag respond))
+    (rts@RuntimeState {cm, self, searches}, ns)
+  =
+    case Map.lookup searchTag searches of
+      Nothing -> do
+        {-
+          No identical search is currently being executed, kick off a
+          new one.
+        -}
+        (mcss, ns2) <- runSM legionary ns minimumCompleteServiceSet 
+        rts2 <- foldr (>=>) return (sendOne <$> Set.toList mcss) rts
+        return (
+            rts2 {
+              searches = Map.insert
+                searchTag
+                (mcss, Nothing, [lift . respond])
+                searches
+            },
+            ns2
+          )
+      Just (peers, best, responders) ->
+        {-
+          A search for this tag is already in progress, just add the
+          responder to the responder list.
+        -}
+        return (
+            rts {
+              searches = Map.insert
+                searchTag
+                (peers, best, (lift . respond):responders)
+                searches
+            },
+            ns
+          )
+  where
+    sendOne :: Peer -> RuntimeState i o s -> LIO (RuntimeState i o s)
+    sendOne peer r@RuntimeState {nextId} = do
+      send cm peer (PeerMessage self nextId (Search searchTag))
+      return r {nextId = nextMessageId nextId}
+
+handleMessage {- Search Execution -}
+    {- This is where we handle local search execution. -}
+    legionary
+    (P (PeerMessage source _ (Search searchTag)))
+    (rts@RuntimeState {nextId, cm, self}, ns)
+  = do
+    (output, ns2) <- runSM legionary ns (SM.search searchTag) 
+    send cm source (PeerMessage self nextId (SearchResponse searchTag output))
+    return (rts {nextId = nextMessageId nextId}, ns2)
+
+handleMessage {- Search Response -}
+    {-
+      This is where we gather all the responses from the various peers
+      to which we dispatched search requests.
+    -}
+    _legionary
+    (msg@(P (PeerMessage source _ (SearchResponse searchTag response))))
+    (rts@RuntimeState {searches}, ns)
+  =
+    {- TODO: see if this function can't be made more elegant. -}
+    case Map.lookup searchTag searches of
+      Nothing -> do
+        {- There is no search happening. -}
+        $(logWarn) . pack $ "Unsolicited SearchResponse: " ++ show msg
+        return (rts, ns)
+      Just (peers, best, responders) ->
+        if source `Set.member` peers
+          then
+            let peers2 = Set.delete source peers
+            in if null peers2
+              then do
+                {-
+                  All peers have responded, go ahead and respond to
+                  the client.
+                -}
+                mapM_ ($ bestOf best response) responders
+                return (
+                    rts {searches = Map.delete searchTag searches},
+                    ns
+                  )
+              else
+                {- We are still waiting on some outstanding requests. -}
+                return (
+                    rts {
+                      searches = Map.insert
+                        searchTag
+                        (peers2, bestOf best response, responders)
+                        searches
+                    },
+                    ns
+                  )
+          else do
+            {-
+              There is a search happening, but the peer that responded
+              is not part of it.
+            -}
+            $(logWarn) . pack $ "Unsolicited SearchResponse: " ++ show msg
+            return (rts, ns)
+  where
+    {- |
+      Figure out which index record returned to us by the various peers
+      is the most appropriate to return. This is mostly like 'min' but
+      we can't use 'min' (or fancy applicative formulations) because we
+      want to favor 'Just' instead of 'Nothing'.
+    -}
+    bestOf :: Maybe IndexRecord -> Maybe IndexRecord -> Maybe IndexRecord
+    bestOf (Just a) (Just b) = Just (min a b)
+    bestOf Nothing b = b
+    bestOf a Nothing = a
 
 handleMessage {- Join Request -}
     legionary
@@ -590,7 +715,16 @@ forkLegionary legionary settings startupMode = do
         rtMakeRequest = \key request -> liftIO $ do
           responseVar <- newEmptyMVar
           writeChan chan (Request key request (putMVar responseVar))
-          takeMVar responseVar
+          takeMVar responseVar,
+        rtSearch =
+          let
+            findNext :: SearchTag -> IO (Maybe IndexRecord)
+            findNext searchTag = do
+              responseVar <- newEmptyMVar
+              writeChan chan (SearchDispatch searchTag (putMVar responseVar))
+              takeMVar responseVar
+          in findNext
+
       }
 
 
@@ -599,20 +733,36 @@ forkLegionary legionary settings startupMode = do
   Legion application. This allows you to make requests and access the
   partition index.
 
-  'Runtime' is an opaque structure. Use 'makeRequst' to access it.
+  'Runtime' is an opaque structure. Use 'makeRequest' to access it.
 -}
 data Runtime i o = Runtime {
     {- |
       Send your customized request to the legion runtime, and get back
       a response.
     -}
-    rtMakeRequest :: PartitionKey -> i -> IO o
+    rtMakeRequest :: PartitionKey -> i -> IO o,
+
+    {- | Query the index to find a set of partition keys.  -}
+    rtSearch :: SearchTag -> IO (Maybe IndexRecord)
   }
 
 
 {- | Send a user request to the legion runtime. -}
 makeRequest :: (MonadIO io) => Runtime i o -> PartitionKey -> i -> io o
 makeRequest rt key = liftIO . rtMakeRequest rt key
+
+
+{- |
+  Send a search request to the legion runtime. Returns results that are
+  __strictly greater than__ the provided 'SearchTag'.
+-}
+search :: (MonadIO io) => Runtime i o -> SearchTag -> Source io IndexRecord
+search rt tag =
+  liftIO (rtSearch rt tag) >>= \case
+    Nothing -> return ()
+    Just record@IndexRecord {irTag, irKey} -> do
+      yield record
+      search rt (SearchTag irTag (Just irKey))
 
 
 {- | This is the type of message passed around in the runtime. -}
@@ -628,12 +778,37 @@ instance (Show i, Show o, Show s) => Show (RuntimeMessage i o s) where
   show (A a) = "(A (" ++ show a ++ "))"
 
 
-{- | The runtime state. -}
+{- |
+  The runtime state.
+
+  The 'searches' field is a little weird.
+
+  It turns out that searches are deterministic over the parameters of
+  'SearchTag' and cluster state. This should make sense, because everything in
+  Haskell is deterministic given __all__ the parameters. Since the cluster
+  state only changes over time, searches that happen "at the same time" and
+  for the same 'SearchTag' can be considered identical. I don't think it is too
+  much of a stretch to say that searches that have overlapping execution times
+  can be considered to be happening "at the same time", therefore the
+  search tag becomes determining factor in the result of the search.
+
+  This is a long-winded way of justifying the fact that, if we are currently
+  executing a search and an identical search requests arrives, then the second
+  identical search is just piggy-backed on the results of the currently
+  executing search. Whether this counts as a premature optimization hack or a
+  beautifully elegant expression of platonic reality is left as an exercise for
+  the reader. It does help simplify the code a little bit because we don't have
+  to specify some kind of UUID to identify otherwise identical searches.
+
+-}
 data RuntimeState i o s = RuntimeState {
          self :: Peer,
     forwarded :: Map MessageId (o -> LIO ()),
        nextId :: MessageId,
-           cm :: ConnectionManager i o s
+           cm :: ConnectionManager i o s,
+     searches :: Map
+                  SearchTag
+                  (Set Peer, Maybe IndexRecord, [Maybe IndexRecord -> LIO ()])
   }
 
 
