@@ -12,6 +12,8 @@
 module Network.Legion.Runtime (
   forkLegionary,
   StartupMode(..),
+  Runtime,
+  makeRequest,
 ) where
 
 import Control.Concurrent (forkIO)
@@ -567,13 +569,13 @@ fam SockAddrCan {} = AF_CAN
   Forks the legion framework in a background thread, and returns a way to
   send user requests to it and retrieve the responses to those requests.
 -}
-forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io, MonadIO io2)
+forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
   => Legionary i o s
     {- ^ The user-defined legion application to run. -}
   -> LegionarySettings
     {- ^ Settings and configuration of the legionary framework. -}
   -> StartupMode
-  -> io (PartitionKey -> i -> io2 o)
+  -> io (Runtime i o)
 
 forkLegionary legionary settings startupMode = do
   logging <- askLoggerIO
@@ -581,11 +583,33 @@ forkLegionary legionary settings startupMode = do
     chan <- liftIO newChan
     forkC "main legion thread" $
       runLegionary legionary settings startupMode (chanToSource chan)
-    return (\ key request -> liftIO $ do
-        responseVar <- newEmptyMVar
-        writeChan chan ((key, request), putMVar responseVar)
-        takeMVar responseVar
-      )
+    return Runtime {
+        rtMakeRequest = \key request -> liftIO $ do
+          responseVar <- newEmptyMVar
+          writeChan chan ((key, request), putMVar responseVar)
+          takeMVar responseVar
+      }
+
+
+{- |
+  This type represents a handle to the runtime environment of your
+  Legion application. This allows you to make requests and access the
+  partition index.
+
+  'Runtime' is an opaque structure. Use 'makeRequst' to access it.
+-}
+data Runtime i o = Runtime {
+    {- |
+      Send your customized request to the legion runtime, and get back
+      a response.
+    -}
+    rtMakeRequest :: PartitionKey -> i -> IO o
+  }
+
+
+{- | Send a user request to the legion runtime. -}
+makeRequest :: (MonadIO io) => Runtime i o -> PartitionKey -> i -> io o
+makeRequest rt key = liftIO . rtMakeRequest rt key
 
 
 {- | This is the type of message passed around in the runtime. -}

@@ -33,6 +33,8 @@ module Network.Legion (
   -- $invocation
   forkLegionary,
   StartupMode(..),
+  Runtime,
+  makeRequest,
   -- * Fundamental Types
   PartitionKey(..),
   PartitionPowerState,
@@ -56,7 +58,7 @@ import Network.Legion.PartitionKey (PartitionKey(K, unkey))
 import Network.Legion.PartitionState (PartitionPowerState, infimum, projected)
 import Network.Legion.PowerState (ApplyDelta(apply))
 import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
-  forkLegionary)
+  forkLegionary, Runtime, makeRequest)
 import Network.Legion.Settings (LegionarySettings(LegionarySettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 
