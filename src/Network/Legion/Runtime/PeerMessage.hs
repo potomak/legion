@@ -8,7 +8,7 @@ module Network.Legion.Runtime.PeerMessage (
   PeerMessagePayload(..),
   MessageId,
   newSequence,
-  next,
+  nextMessageId,
 ) where
 
 import Control.Monad.Trans.Class (lift)
@@ -73,7 +73,7 @@ newSequence = lift $ do
   `succ` for this kind of thing, but making `MessageId` an instance of
   `Enum` really isn't appropriate.
 -}
-next :: MessageId -> MessageId
-next (M sequenceId ord) = M sequenceId (ord + 1)
+nextMessageId :: MessageId -> MessageId
+nextMessageId (M sequenceId ord) = M sequenceId (ord + 1)
 
 

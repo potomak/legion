@@ -48,7 +48,7 @@ import Network.Legion.Runtime.ConnectionManager (newConnectionManager,
   send, ConnectionManager, newPeers)
 import Network.Legion.Runtime.PeerMessage (PeerMessage(PeerMessage),
   PeerMessagePayload(ForwardRequest, ForwardResponse, ClusterMerge,
-  PartitionMerge), MessageId, newSequence, next)
+  PartitionMerge), MessageId, newSequence, nextMessageId)
 import Network.Legion.Settings (LegionarySettings(LegionarySettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 import Network.Legion.StateMachine (partitionMerge, clusterMerge,
@@ -215,14 +215,14 @@ clusterAction
     rts@RuntimeState {self, nextId, cm}
   = do
     send cm peer (PeerMessage self nextId (ClusterMerge ps))
-    return rts {nextId = next nextId}
+    return rts {nextId = nextMessageId nextId}
 
 clusterAction
     (SM.PartitionMerge peer key ps)
     rts@RuntimeState {self, nextId, cm}
   = do
     send cm peer (PeerMessage self nextId (PartitionMerge key ps))
-    return rts {nextId = next nextId}
+    return rts {nextId = nextMessageId nextId}
 
 
 {- |
@@ -263,10 +263,10 @@ handleMessage {- Forward Request -}
         send cm source (
             PeerMessage self nextId (ForwardResponse mid response)
           )
-        return (rts {nextId = next nextId}, ns2)
+        return (rts {nextId = nextMessageId nextId}, ns2)
       Forward peer -> do
         send cm peer msg
-        return (rts {nextId = next nextId}, ns2)
+        return (rts {nextId = nextMessageId nextId}, ns2)
 
 handleMessage {- Forward Response -}
     _legionary
@@ -298,7 +298,7 @@ handleMessage {- User Request -}
         return (
             rts {
               forwarded = Map.insert nextId (lift . respond) forwarded,
-              nextId = next nextId
+              nextId = nextMessageId nextId
             },
             ns2
           )
