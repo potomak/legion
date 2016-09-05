@@ -117,7 +117,7 @@ claimParticipation
   -> KeySet
   -> ClusterPropState
   -> ClusterPropState
-claimParticipation peer ks = 
+claimParticipation peer ks =
   ClusterPropState
   . P.delta (Participating peer ks)
   . unPropState

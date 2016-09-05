@@ -109,7 +109,7 @@ setServer = addServerHeader . stripServerHeader
       Strip the server header
     -}
     stripServerHeader :: Middleware
-    stripServerHeader = modifyResponse (stripHeader "Server") 
+    stripServerHeader = modifyResponse (stripHeader "Server")
 
     {- |
       Add our own server header.

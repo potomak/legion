@@ -233,7 +233,7 @@ handleMessage {- Partition Merge -}
   = do
     ((), ns2) <- runSM legionary ns (partitionMerge source key ps)
     return (rts, ns2)
-  
+
 handleMessage {- Cluster Merge -}
     legionary
     (P (PeerMessage source _ (ClusterMerge cs)))
@@ -257,7 +257,7 @@ handleMessage {- Forward Request -}
       Forward peer -> do
         send cm peer msg
         return (rts {nextId = next nextId}, ns2)
-    
+
 handleMessage {- Forward Response -}
     _legionary
     (msg@(P (PeerMessage _ _ (ForwardResponse mid response))))
@@ -474,7 +474,7 @@ makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
       sourceSocket so =$= conduitDecode $$ do
         response <- await
         case response of
-          Nothing -> fail 
+          Nothing -> fail
             $ "Couldn't join a cluster because there was no response "
             ++ "to our join request!"
           Just (JoinOk self cps) ->

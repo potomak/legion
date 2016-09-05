@@ -60,7 +60,7 @@ newMemoryPersistence = do
       -> IO (Maybe (PartitionPowerState i s))
     fetchState cacheT key = atomically $
       lookup key <$> readTVar cacheT
-    
+
     list_
       :: TVar (Map PartitionKey (PartitionPowerState i s))
       -> Source IO (PartitionKey, PartitionPowerState i s)
@@ -106,7 +106,7 @@ diskPersistence directory = Persistence {
     list = do
         keys <- lift $ readHexList <$> getDirectoryContents directory
         sourceList keys =$= fillData
-      where 
+      where
         fillData = awaitForever (\key -> do
             let path = toPath key
             state <- lift ((decode . fromStrict) <$> readFile path)

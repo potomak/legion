@@ -102,7 +102,7 @@ following characteristics:
   "last write wins".
 
 - Meet Semilattices.
-  
+
   TODO: fill out this section.
 
 - Pure Haskell Interface.

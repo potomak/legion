@@ -40,7 +40,6 @@ import qualified Network.Legion.KeySet as KS
 newtype Peer = Peer UUID deriving (Show, Binary, Eq, Ord)
 instance Read Peer where
   readPrec = Peer <$> readPrec
-  
 
 
 {- |
@@ -56,17 +55,13 @@ instance ToJSON ParticipationDefaults where
     ]
 
 
-{- |
-  Constuct a distribution that contains no partitions.
--}
+{- | Constuct a distribution that contains no partitions. -}
 empty :: ParticipationDefaults
 
 empty = D []
 
 
-{- |
-  Find the peers that own the specified partition.
--}
+{- | Find the peers that own the specified partition. -}
 findPartition :: PartitionKey -> ParticipationDefaults -> Set Peer
 
 findPartition k d =
@@ -130,7 +125,7 @@ rebalanceAction self allPeers (D dist) =
         mostUnderserved = sortBy (compare `on` Set.size . snd) underserved
       in case mostUnderserved of
         [] -> Nothing
-        (ks, ps):_ -> 
+        (ks, ps):_ ->
           let
             candidateHosts = toList (allPeers Set.\\ ps)
             bestHosts = sort [(weightOf p, p) | p <- candidateHosts]

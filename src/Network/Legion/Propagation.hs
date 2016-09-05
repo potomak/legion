@@ -141,7 +141,7 @@ data PeerStatus
 {- |
   Create a new propagation state.
 -}
-new :: (Default s) => o -> p -> Set p -> PropState o s p d 
+new :: (Default s) => o -> p -> Set p -> PropState o s p d
 new origin self participants =
   PropState {
       powerState = PS.new origin participants,

@@ -20,7 +20,7 @@ import Network.Legion.PowerState (ApplyDelta)
 {- |
   This is a more convenient way to write the somewhat unwieldy set of
   constraints
-   
+
   > (
   >   ApplyDelta i s, Default s, Binary i, Binary o, Binary s, Show i,
   >   Show o, Show s, Eq i
@@ -51,9 +51,8 @@ data Legionary i o s = Legionary {
       Given a request and a state, returns a response to the request.
     -}
     handleRequest :: PartitionKey -> i -> s -> o,
-    {- |
-      The user-defined persistence layer implementation.
-    -}
+
+    {- | The user-defined persistence layer implementation. -}
     persistence :: Persistence i s
   }
 

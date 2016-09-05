@@ -391,8 +391,13 @@ getPartition key = SM $ do
     Just partition -> return partition
 
 
-{- | Saves a partition state. -}
-savePartition :: PartitionKey -> PartitionPropState i s -> SM i o s ()
+{- |
+  Saves a partition state.
+-}
+savePartition
+  :: PartitionKey
+  -> PartitionPropState i s
+  -> SM i o s ()
 savePartition key partition = SM $ do
   Legionary {persistence} <- ask
   ns@NodeState {partitions} <- lift get

@@ -9,9 +9,7 @@ module Network.Legion.LIO (
 import Control.Monad.Logger (LoggingT)
 
 
-{- |
-  The logging monad in wich legion operates.
--}
+{- | The logging monad in wich legion operates. -}
 type LIO = LoggingT IO
 
 
