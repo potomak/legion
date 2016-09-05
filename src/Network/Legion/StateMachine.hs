@@ -283,7 +283,7 @@ propagate = SM $ do
         newPartitions = Map.fromAscList [
             (key, newPartition)
             | (key, newPartition, _) <- updates
-            , not (P.complete newPartition)
+            , not (P.idle newPartition)
           ]
       (lift . put) ns {
           partitions = newPartitions
@@ -407,7 +407,7 @@ savePartition key partition = SM $ do
         else Nothing
     ))
   lift $ put ns {
-      partitions = if P.complete partition
+      partitions = if P.idle partition
         then
           {-
             Remove the partition from the working cache because there

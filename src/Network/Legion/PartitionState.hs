@@ -19,7 +19,7 @@ module Network.Legion.PartitionState (
   projParticipants,
   projected,
   infimum,
-  complete,
+  idle,
 ) where
 
 import Data.Aeson (ToJSON)
@@ -188,7 +188,7 @@ infimum = P.infimum . unPowerState
   only way more work can happen is if new deltas are applied, either directly
   or via a merge.
 -}
-complete :: PartitionPropState i s -> Bool
-complete = P.complete . unPropState
+idle :: PartitionPropState i s -> Bool
+idle = P.idle . unPropState
 
 
