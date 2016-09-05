@@ -11,7 +11,6 @@
 -}
 module Network.Legion.Runtime (
   forkLegionary,
-  runLegionary,
   StartupMode(..),
 ) where
 
@@ -35,7 +34,7 @@ import GHC.Generics (Generic)
 import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
   Eject))
 import Network.Legion.Application (LegionConstraints,
-  Legionary(Legionary), RequestMsg, persistence, getState)
+  Legionary(Legionary), persistence, getState)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
@@ -139,6 +138,15 @@ runLegionary
     loggingC c = do
       logging <- askLoggerIO
       return (transPipe (`runLoggingT` logging) c)
+
+
+{- |
+  This is how requests are packaged when they are sent to the legion framework
+  for handling. It includes the request information itself, a partition key to
+  which the request is directed, and a way for the framework to deliver the
+  response to some interested party.
+-}
+type RequestMsg i o = ((PartitionKey, i), o -> IO ())
 
 
 messageSink :: (LegionConstraints i o s)

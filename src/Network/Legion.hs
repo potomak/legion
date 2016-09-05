@@ -29,11 +29,9 @@ module Network.Legion (
   LegionConstraints,
   Persistence(..),
   ApplyDelta(..),
-  RequestMsg,
   -- * Invoking Legion
   -- $invocation
   forkLegionary,
-  runLegionary,
   StartupMode(..),
   -- * Fundamental Types
   PartitionKey(..),
@@ -52,13 +50,13 @@ import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Network.Legion.Application (LegionConstraints,
   Persistence(Persistence, getState, saveState, list),
-  Legionary(Legionary, persistence, handleRequest), RequestMsg)
+  Legionary(Legionary, persistence, handleRequest))
 import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
 import Network.Legion.PartitionKey (PartitionKey(K, unkey))
 import Network.Legion.PartitionState (PartitionPowerState, infimum, projected)
 import Network.Legion.PowerState (ApplyDelta(apply))
-import Network.Legion.Runtime (runLegionary, StartupMode(NewCluster,
-  JoinCluster), forkLegionary)
+import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
+  forkLegionary)
 import Network.Legion.Settings (LegionarySettings(LegionarySettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 

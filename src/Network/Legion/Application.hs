@@ -7,7 +7,6 @@ module Network.Legion.Application (
   LegionConstraints,
   Legionary(..),
   Persistence(..),
-  RequestMsg,
 ) where
 
 import Data.Binary (Binary)
@@ -73,19 +72,5 @@ data Persistence i s = Persistence {
         conduit is terminated without reading the entire list.
       -}
   }
-
-
-{- |
-  This is how requests are packaged when they are sent to the legion framework
-  for handling. It includes the request information itself, a partition key to
-  which the request is directed, and a way for the framework to deliver the
-  response to some interested party.
-
-  Unless you know exactly what you are doing, you will have used
-  'Network.Legion.forkLegionary' instead of 'Network.Legion.runLegionary'
-  to run the framework, in which case you can safely ignore the existence
-  of this type.
--}
-type RequestMsg i o = ((PartitionKey, i), o -> IO ())
 
 
