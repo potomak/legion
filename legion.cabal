@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                legion
-version:             0.2.0.0
+version:             0.3.0.0
 synopsis:            Distributed, stateful, homogeneous microservice framework.
 description:         Legion is a framework for writing distributed,
                      homogeneous, stateful microservices in Haskell.
