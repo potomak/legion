@@ -20,7 +20,7 @@ import Data.Word (Word64)
 
 
 {- | This is how partitions are identified and referenced. -}
-newtype PartitionKey = K {unkey :: Word256} deriving (Eq, Ord, Show, Bounded)
+newtype PartitionKey = K {unKey :: Word256} deriving (Eq, Ord, Show, Bounded)
 
 instance Binary PartitionKey where
   put (K (Word256 (Word128 a b) (Word128 c d))) = put (a, b, c, d)
