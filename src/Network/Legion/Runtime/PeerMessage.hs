@@ -8,7 +8,7 @@ module Network.Legion.Runtime.PeerMessage (
   PeerMessagePayload(..),
   MessageId,
   newSequence,
-  next,
+  nextMessageId,
 ) where
 
 import Control.Monad.Trans.Class (lift)
@@ -18,6 +18,7 @@ import Data.Word (Word64)
 import GHC.Generics (Generic)
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Distribution (Peer)
+import Network.Legion.Index (SearchTag, IndexRecord)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState)
@@ -49,6 +50,8 @@ data PeerMessagePayload i o s
   | ForwardRequest PartitionKey i
   | ForwardResponse MessageId o
   | ClusterMerge ClusterPowerState
+  | Search SearchTag
+  | SearchResponse SearchTag (Maybe IndexRecord)
   deriving (Generic, Show)
 instance (Binary i, Binary o, Binary s) => Binary (PeerMessagePayload i o s)
 
@@ -73,7 +76,7 @@ newSequence = lift $ do
   `succ` for this kind of thing, but making `MessageId` an instance of
   `Enum` really isn't appropriate.
 -}
-next :: MessageId -> MessageId
-next (M sequenceId ord) = M sequenceId (ord + 1)
+nextMessageId :: MessageId -> MessageId
+nextMessageId (M sequenceId ord) = M sequenceId (ord + 1)
 
 

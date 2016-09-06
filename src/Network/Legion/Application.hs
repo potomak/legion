@@ -7,12 +7,13 @@ module Network.Legion.Application (
   LegionConstraints,
   Legionary(..),
   Persistence(..),
-  RequestMsg,
 ) where
 
 import Data.Binary (Binary)
 import Data.Conduit (Source)
 import Data.Default.Class (Default)
+import Data.Set (Set)
+import Network.Legion.Index (Tag)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta)
@@ -20,7 +21,7 @@ import Network.Legion.PowerState (ApplyDelta)
 {- |
   This is a more convenient way to write the somewhat unwieldy set of
   constraints
-   
+
   > (
   >   ApplyDelta i s, Default s, Binary i, Binary o, Binary s, Show i,
   >   Show o, Show s, Eq i
@@ -51,10 +52,16 @@ data Legionary i o s = Legionary {
       Given a request and a state, returns a response to the request.
     -}
     handleRequest :: PartitionKey -> i -> s -> o,
+
+    {- | The user-defined persistence layer implementation. -}
+    persistence :: Persistence i s,
+
     {- |
-      The user-defined persistence layer implementation.
+      A way of indexing partitions so that they can be found without
+      knowing the partition key. An index entry for the partition will be
+      created under each of the tags returned by this function.
     -}
-    persistence :: Persistence i s
+    index :: s -> Set Tag
   }
 
 
@@ -74,19 +81,5 @@ data Persistence i s = Persistence {
         conduit is terminated without reading the entire list.
       -}
   }
-
-
-{- |
-  This is how requests are packaged when they are sent to the legion framework
-  for handling. It includes the request information itself, a partition key to
-  which the request is directed, and a way for the framework to deliver the
-  response to some interested party.
-
-  Unless you know exactly what you are doing, you will have used
-  'Network.Legion.forkLegionary' instead of 'Network.Legion.runLegionary'
-  to run the framework, in which case you can safely ignore the existence
-  of this type.
--}
-type RequestMsg i o = ((PartitionKey, i), o -> IO ())
 
 

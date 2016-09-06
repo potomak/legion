@@ -27,7 +27,7 @@ module Network.Legion.Propagation (
   projParticipants,
   projected,
   infimum,
-  complete,
+  idle,
 ) where
 
 import Prelude hiding (lookup)
@@ -141,7 +141,7 @@ data PeerStatus
 {- |
   Create a new propagation state.
 -}
-new :: (Default s) => o -> p -> Set p -> PropState o s p d 
+new :: (Default s) => o -> p -> Set p -> PropState o s p d
 new origin self participants =
   PropState {
       powerState = PS.new origin participants,
@@ -385,8 +385,8 @@ infimum = PS.infimumValue . unPowerState
   only way more work can happen is if new deltas are applied, either directly
   or via a merge.
 -}
-complete :: (Ord p) => PropState o s p d -> Bool
-complete PropState {powerState, peerStates} =
+idle :: (Ord p) => PropState o s p d -> Bool
+idle PropState {powerState, peerStates} =
   Map.null peerStates && Set.null (divergent powerState)
 
 

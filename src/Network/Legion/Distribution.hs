@@ -13,6 +13,7 @@ module Network.Legion.Distribution (
   rebalanceAction,
   RebalanceAction(..),
   newPeer,
+  minimumCompleteServiceSet,
 ) where
 
 import Prelude hiding (null)
@@ -40,7 +41,6 @@ import qualified Network.Legion.KeySet as KS
 newtype Peer = Peer UUID deriving (Show, Binary, Eq, Ord)
 instance Read Peer where
   readPrec = Peer <$> readPrec
-  
 
 
 {- |
@@ -56,17 +56,13 @@ instance ToJSON ParticipationDefaults where
     ]
 
 
-{- |
-  Constuct a distribution that contains no partitions.
--}
+{- | Constuct a distribution that contains no partitions. -}
 empty :: ParticipationDefaults
 
 empty = D []
 
 
-{- |
-  Find the peers that own the specified partition.
--}
+{- | Find the peers that own the specified partition. -}
 findPartition :: PartitionKey -> ParticipationDefaults -> Set Peer
 
 findPartition k d =
@@ -76,6 +72,15 @@ findPartition k d =
       $ "No exact mach for key in distribution. This means there is a bug in "
       ++ "the module `Network.Legion.Distribution`. Please report this bug "
       ++ "via github: " ++ show (k, d)
+
+
+{- | Find a solution to the minimum complete service set. -}
+minimumCompleteServiceSet :: ParticipationDefaults -> Set Peer
+minimumCompleteServiceSet defs = Set.fromList [
+    p
+    | (_, peers) <- unD defs
+    , Just (p, _) <- [Set.minView peers]
+  ]
 
 
 {- |
@@ -130,7 +135,7 @@ rebalanceAction self allPeers (D dist) =
         mostUnderserved = sortBy (compare `on` Set.size . snd) underserved
       in case mostUnderserved of
         [] -> Nothing
-        (ks, ps):_ -> 
+        (ks, ps):_ ->
           let
             candidateHosts = toList (allPeers Set.\\ ps)
             bestHosts = sort [(weightOf p, p) | p <- candidateHosts]

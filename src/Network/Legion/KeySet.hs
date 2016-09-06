@@ -26,7 +26,7 @@ import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
   BoundaryAbove, BoundaryAboveAll, BoundaryBelowAll), makeRangedSet,
   rSetHas, rSetUnion, (-!-), unsafeRangedSet, rSetRanges)
 import GHC.Generics (Generic)
-import Network.Legion.PartitionKey (PartitionKey(K, unkey))
+import Network.Legion.PartitionKey (PartitionKey(K, unKey))
 
 
 {- |
@@ -162,7 +162,7 @@ rangeSize (Range (BoundaryBelow a) (BoundaryAbove b)) = (toI b - toI a) + 1
   To help with `rangeSize`.
 -}
 toI :: PartitionKey -> Integer
-toI = toInteger . unkey
+toI = toInteger . unKey
 
 
 {- |

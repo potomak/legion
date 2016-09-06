@@ -50,6 +50,8 @@ module Network.Legion.StateMachine(
   heartbeat,
   eject,
   join,
+  minimumCompleteServiceSet,
+  search,
 
   -- * State machine outputs.
   ClusterAction(..),
@@ -71,16 +73,18 @@ import Data.Conduit (($=), ($$), Sink, transPipe, awaitForever)
 import Data.Default.Class (Default)
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
-import Data.Set ((\\))
+import Data.Set (Set, (\\))
 import Data.Text (pack, unpack)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Time.Clock (getCurrentTime)
 import Network.Legion.Application (Legionary(Legionary), getState,
-  saveState, list, persistence, handleRequest)
+  saveState, list, persistence, handleRequest, index)
 import Network.Legion.BSockAddr (BSockAddr)
 import Network.Legion.ClusterState (ClusterPropState, ClusterPowerState)
 import Network.Legion.Distribution (Peer, rebalanceAction, newPeer,
   RebalanceAction(Invite))
+import Network.Legion.Index (IndexRecord(IndexRecord), stTag, stKey,
+  irTag, irKey, SearchTag(SearchTag))
 import Network.Legion.KeySet (KeySet, union)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
@@ -90,6 +94,7 @@ import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Network.Legion.ClusterState as C
+import qualified Network.Legion.Distribution as D
 import qualified Network.Legion.KeySet as KS
 import qualified Network.Legion.PartitionState as P
 
@@ -102,7 +107,8 @@ data NodeState i s = NodeState {
              self :: Peer,
           cluster :: ClusterPropState,
        partitions :: Map PartitionKey (PartitionPropState i s),
-        migration :: KeySet
+        migration :: KeySet,
+          nsIndex :: Set IndexRecord
   }
 instance (Show i, Show s) => Show (NodeState i s) where
   show = unpack . decodeUtf8 . toStrict . encode
@@ -111,12 +117,13 @@ instance (Show i, Show s) => Show (NodeState i s) where
   instance is very hard to read.
 -}
 instance (Show i, Show s) => ToJSON (NodeState i s) where
-  toJSON (NodeState self cluster partitions migration) =
+  toJSON (NodeState self cluster partitions migration nsIndex) =
     object [
               "self" .= show self,
            "cluster" .= cluster,
         "partitions" .= Map.mapKeys show partitions,
-         "migration" .= show migration
+         "migration" .= show migration,
+           "nsIndex" .= show nsIndex
       ]
 
 
@@ -129,7 +136,8 @@ newNodeState self cluster =
       self,
       cluster,
       partitions = Map.empty,
-      migration = KS.empty
+      migration = KS.empty,
+      nsIndex = Set.empty
     }
 
 
@@ -236,7 +244,7 @@ clusterMerge source foreignCluster = SM . lift $ do
   peer to a partition. This will cause the data to be transfered in the
   normal course of propagation.
 -}
-migrate :: (ApplyDelta i s) => SM i o s ()
+migrate :: (Default s, ApplyDelta i s) => SM i o s ()
 migrate = do
     NodeState {migration} <- (SM . lift) get
     Legionary {persistence} <- SM ask
@@ -246,7 +254,7 @@ migrate = do
       $$ accum
     (SM . lift) $ modify (\ns -> ns {migration = KS.empty})
   where
-    accum :: (ApplyDelta i s)
+    accum :: (Default s, ApplyDelta i s)
       => Sink (PartitionKey, PartitionPowerState i s) (SM i o s) ()
     accum = awaitForever $ \ (key, ps) -> do
       NodeState {self, cluster, partitions} <- (lift . SM . lift) get
@@ -283,7 +291,7 @@ propagate = SM $ do
         newPartitions = Map.fromAscList [
             (key, newPartition)
             | (key, newPartition, _) <- updates
-            , not (P.complete newPartition)
+            , not (P.idle newPartition)
           ]
       (lift . put) ns {
           partitions = newPartitions
@@ -353,6 +361,48 @@ join peerAddr = SM $ do
 
 
 {- |
+  Figure out the set of nodes to which search requests should be
+  dispatched. "Minimum complete service set" means the minimum set
+  of peers that, together, service the whole partition key space;
+  thereby guaranteeing that if any particular partition is indexed,
+  the corresponding index record will exist on one of these peers.
+
+  Implementation considerations:
+
+  There will usually be more than one solution for the MCSS. For now,
+  we just compute a deterministic solution, but we should implement
+  a random (or pseudo-random) solution in order to maximally balance
+  cluster resources.
+
+  Also, it is not clear that the minimum complete service set is even
+  what we really want. MCSS will reduce overall network utilization,
+  but it may actually increase latency. If we were to dispatch redundant
+  requests to multiple nodes, we could continue with whichever request
+  returns first, and ignore the slow responses. This is probably the
+  best solution. We will call this "fastest competitive search".
+
+  TODO: implement fastest competitive search.
+-}
+minimumCompleteServiceSet :: SM i o s (Set Peer)
+minimumCompleteServiceSet = SM $ do
+  NodeState {cluster} <- lift get
+  return (D.minimumCompleteServiceSet (C.getDistribution cluster))
+
+
+{- |
+  Search the index, and return the first record that is __strictly
+  greater than__ the provided search tag, if such a record exists.
+-}
+search :: SearchTag -> SM i o s (Maybe IndexRecord)
+search SearchTag {stTag, stKey = Nothing} = SM $ do
+  NodeState {nsIndex} <- lift get
+  return (Set.lookupGE IndexRecord {irTag = stTag, irKey = minBound} nsIndex)
+search SearchTag {stTag, stKey = Just key} = SM $ do
+  NodeState {nsIndex} <- lift get
+  return (Set.lookupGT IndexRecord {irTag = stTag, irKey = key} nsIndex)
+
+
+{- |
   These are the actions that a node can take which allow it to coordinate
   with other nodes. It is up to the runtime system to implement the
   actions.
@@ -391,18 +441,35 @@ getPartition key = SM $ do
     Just partition -> return partition
 
 
-{- | Saves a partition state. -}
-savePartition :: PartitionKey -> PartitionPropState i s -> SM i o s ()
+{- |
+  Saves a partition state. This function automatically handles the cache
+  for active propagations, as well as reindexing of partitions.
+-}
+savePartition :: (Default s, ApplyDelta i s)
+  => PartitionKey
+  -> PartitionPropState i s
+  -> SM i o s ()
 savePartition key partition = SM $ do
-  Legionary {persistence} <- ask
-  ns@NodeState {partitions} <- lift get
+  Legionary {persistence, index} <- ask
+  oldTags <- index . P.ask <$> unSM (getPartition key)
+  let
+    currentTags = index (P.ask partition)
+    {- TODO: maybe use Set.mapMonotonic for performance?  -}
+    obsoleteRecords = Set.map (flip IndexRecord key) (oldTags \\ currentTags)
+    newRecords = Set.map (flip IndexRecord key) currentTags
+
+  $(logDebug) . pack
+    $ "Tagging " ++ show key ++ " with: "
+    ++ show (currentTags, obsoleteRecords, newRecords)
+
+  ns@NodeState {partitions, nsIndex} <- lift get
   lift3 (saveState persistence key (
       if P.participating partition
         then Just (P.getPowerState partition)
         else Nothing
     ))
   lift $ put ns {
-      partitions = if P.complete partition
+      partitions = if P.idle partition
         then
           {-
             Remove the partition from the working cache because there
@@ -411,7 +478,8 @@ savePartition key partition = SM $ do
           -}
           Map.delete key partitions
         else
-          Map.insert key partition partitions
+          Map.insert key partition partitions,
+      nsIndex = (nsIndex \\ obsoleteRecords) `Set.union` newRecords
     }
 
 
