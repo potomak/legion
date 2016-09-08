@@ -46,8 +46,6 @@ module Network.Legion (
   -- * Fundamental Types
   PartitionKey(..),
   PartitionPowerState,
-  projected,
-  infimum,
   -- * Framework Configuration
   -- $framework-config
   LegionarySettings(..),
@@ -65,7 +63,7 @@ import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
 import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
   irTag, irKey), SearchTag(SearchTag, stTag, stKey))
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
-import Network.Legion.PartitionState (PartitionPowerState, infimum, projected)
+import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta(apply))
 import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
   forkLegionary, Runtime, makeRequest, search)
