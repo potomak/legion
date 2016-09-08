@@ -26,10 +26,10 @@ Why is it hard to write stateful microservices *without* resorting to
 the DB?  Well, for the same reason it is hard to write a distributed
 database in the first place. If you are storing state, you have to
 worry about scaling that state by distributing it across a cluster,
-ensuring the durability of the state by replicating it, finding the
-state so that it can be matched with relevant requests.  You have to
-worry about nodes entering an exiting the cluster, and how the state is
-repaired and rebalanced when the cluster topology changes.
+ensuring the durability replicating the state, and routing requests
+to the location where the state is stored.  You have to worry about
+nodes entering an exiting the cluster, and how the state is repaired
+and rebalanced when the cluster topology changes.
 
 Wouldn't it be nice if you could get all that for free and just focus
 on logic of your microservice application?
@@ -63,14 +63,14 @@ on logic of your microservice application?
   to substandard performance, or break A or P in the CAP Theorem.
 
   Another approach some people take to solve this problem is to store
-  CRDTs in the database layer (in fact, Legion relies heavily on CRDTs
-  internally). This approach is limited by the support of your database,
-  and in any case using CRDTs this way is problematic because the growth
-  of most CRDTs is unbounded and increases with usage, causing the
-  size of the CRDT to become prohibitively large over time. It is very
-  difficult to do garbage collection on such CRDTs in a hybrid system.
-  One of the most important things Legion does internally is implement
-  asynchronous CRDT garbage collection.
+  CRDTs in the database layer (in fact, Legion relies heavily on
+  CRDTs internally). This approach is limited by the support of your
+  database, and in any case using CRDTs this way is problematic because
+  the growth of most CRDTs is unbounded over time, causing the size of
+  the CRDT to become prohibitively large. It is very difficult to do
+  garbage collection on such CRDTs in a hybrid system.  One of the most
+  important things Legion does internally is implement asynchronous CRDT
+  garbage collection.
 
 ### Solutions
 

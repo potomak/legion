@@ -23,32 +23,39 @@
 -}
 
 module Network.Legion (
-  -- * Service Implementation
+  -- * Using Legion
+
+  -- ** Starting the Legion Runtime
+  -- $startup
+  forkLegionary,
+  StartupMode(..),
+  Runtime,
+
+  -- ** Runtime Configuration
+  -- $framework-config
+  LegionarySettings(..),
+
+  -- ** Making Runtime Requests
+  makeRequest,
+  search,
+
+  -- * Implementing a Legion Application
   -- $service-implementaiton
 
   -- ** Indexing
   -- $indexing
-
   Legionary(..),
   LegionConstraints,
   Persistence(..),
   ApplyDelta(..),
   Tag(..),
-  -- * Invoking Legion
-  -- $invocation
-  forkLegionary,
-  StartupMode(..),
-  Runtime,
-  makeRequest,
-  search,
+
+  -- * Other Types
   SearchTag(..),
   IndexRecord(..),
-  -- * Fundamental Types
   PartitionKey(..),
   PartitionPowerState,
-  -- * Framework Configuration
-  -- $framework-config
-  LegionarySettings(..),
+
   -- * Utils
   newMemoryPersistence,
   diskPersistence,
@@ -185,7 +192,7 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 
 --------------------------------------------------------------------------------
 
--- $invocation
+-- $startup
 -- While this section is being worked on, you can check out the
 -- [legion-cache](https://github.com/taphu/legion-cache) project for a
 -- working example of how to build a basic distributed key-value store

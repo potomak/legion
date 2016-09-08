@@ -422,9 +422,9 @@ handleMessage {- Search Response -}
   where
     {- |
       Figure out which index record returned to us by the various peers
-      is the most appropriate to return. This is mostly like 'min' but
-      we can't use 'min' (or fancy applicative formulations) because we
-      want to favor 'Just' instead of 'Nothing'.
+      is the most appropriate to return to the user. This is mostly like
+      'min' but we can't use 'min' (or fancy applicative formulations)
+      because we want to favor 'Just' instead of 'Nothing'.
     -}
     bestOf :: Maybe IndexRecord -> Maybe IndexRecord -> Maybe IndexRecord
     bestOf (Just a) (Just b) = Just (min a b)
@@ -737,7 +737,7 @@ forkLegionary legionary settings startupMode = do
 -}
 data Runtime i o = Runtime {
     {- |
-      Send your customized request to the legion runtime, and get back
+      Send an application request to the legion runtime, and get back
       a response.
     -}
     rtMakeRequest :: PartitionKey -> i -> IO o,
@@ -798,8 +798,7 @@ instance (Show i, Show o, Show s) => Show (RuntimeMessage i o s) where
   executing search. Whether this counts as a premature optimization hack or a
   beautifully elegant expression of platonic reality is left as an exercise for
   the reader. It does help simplify the code a little bit because we don't have
-  to specify some kind of UUID to identify otherwise identical searches.
-
+  to specify some kind of UUID to differentiate otherwise identical searches.
 -}
 data RuntimeState i o s = RuntimeState {
          self :: Peer,
