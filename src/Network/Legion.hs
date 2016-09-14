@@ -33,7 +33,7 @@ module Network.Legion (
 
   -- ** Runtime Configuration
   -- $framework-config
-  LegionarySettings(..),
+  RuntimeSettings(..),
 
   -- ** Making Runtime Requests
   makeRequest,
@@ -74,7 +74,7 @@ import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta(apply))
 import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
   forkLegionary, Runtime, makeRequest, search)
-import Network.Legion.Settings (LegionarySettings(LegionarySettings,
+import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 
 --------------------------------------------------------------------------------

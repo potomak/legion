@@ -54,7 +54,7 @@ import Network.Legion.Runtime.PeerMessage (PeerMessage(PeerMessage),
   PeerMessagePayload(ForwardRequest, ForwardResponse, ClusterMerge,
   PartitionMerge, Search, SearchResponse), MessageId, newSequence,
   nextMessageId)
-import Network.Legion.Settings (LegionarySettings(LegionarySettings,
+import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 import Network.Legion.StateMachine (partitionMerge, clusterMerge,
   NodeState, newNodeState, runSM, UserResponse(Forward, Respond),
@@ -86,7 +86,7 @@ import qualified Network.Legion.StateMachine as SM
 runLegionary :: (LegionConstraints i o s)
   => Legionary i o s
     {- ^ The user-defined legion application to run.  -}
-  -> LegionarySettings
+  -> RuntimeSettings
     {- ^ Settings and configuration of the legionary framework.  -}
   -> StartupMode
   -> Source IO (RequestMsg i o)
@@ -99,7 +99,7 @@ runLegionary :: (LegionConstraints i o s)
 
 runLegionary
     legionary
-    settings@LegionarySettings {adminHost, adminPort}
+    settings@RuntimeSettings {adminHost, adminPort}
     startupMode
     requestSource
   = do
@@ -511,10 +511,10 @@ data StartupMode
   @Source LIO PeerMessage@.
 -}
 startPeerListener :: (LegionConstraints i o s)
-  => LegionarySettings
+  => RuntimeSettings
   -> LIO (Source LIO (PeerMessage i o s))
 
-startPeerListener LegionarySettings {peerBindAddr} =
+startPeerListener RuntimeSettings {peerBindAddr} =
     catchAll (do
         (inputChan, so) <- lift $ do
           inputChan <- newChan
@@ -574,11 +574,11 @@ startPeerListener LegionarySettings {peerBindAddr} =
 
 {- | Figure out how to construct the initial node state.  -}
 makeNodeState :: (Show i)
-  => LegionarySettings
+  => RuntimeSettings
   -> StartupMode
   -> LIO (Peer, NodeState i s, Map Peer BSockAddr)
 
-makeNodeState LegionarySettings {peerBindAddr} NewCluster = do
+makeNodeState RuntimeSettings {peerBindAddr} NewCluster = do
   {- Build a brand new node state, for the first node in a cluster. -}
   self <- newPeer
   clusterId <- getUUID
@@ -587,7 +587,7 @@ makeNodeState LegionarySettings {peerBindAddr} NewCluster = do
     nodeState = newNodeState self cluster
   return (self, nodeState, C.getPeers cluster)
 
-makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
+makeNodeState RuntimeSettings {peerBindAddr} (JoinCluster addr) = do
     {-
       Join a cluster by either starting fresh, or recovering from a
       shutdown or crash.
@@ -624,10 +624,10 @@ makeNodeState LegionarySettings {peerBindAddr} (JoinCluster addr) = do
 
 {- | A source of cluster join request messages.  -}
 joinMsgSource
-  :: LegionarySettings
+  :: RuntimeSettings
   -> Source LIO (JoinRequest, JoinResponse -> LIO ())
 
-joinMsgSource LegionarySettings {joinBindAddr} = join . lift $
+joinMsgSource RuntimeSettings {joinBindAddr} = join . lift $
     catchAll (do
         (chan, so) <- lift $ do
           chan <- newChan
@@ -700,7 +700,7 @@ fam SockAddrCan {} = AF_CAN
 forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
   => Legionary i o s
     {- ^ The user-defined legion application to run. -}
-  -> LegionarySettings
+  -> RuntimeSettings
     {- ^ Settings and configuration of the legionary framework. -}
   -> StartupMode
   -> io (Runtime i o)
