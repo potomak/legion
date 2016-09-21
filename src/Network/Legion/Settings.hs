@@ -21,13 +21,9 @@ data LegionarySettings = LegionarySettings {
         join requests.
       -}
     adminHost :: HostPreference,
-      {- ^
-        The host address on which the admin service should run.
-      -}
+      {- ^ The host address on which the admin service should run.  -}
     adminPort :: Port
-      {- ^
-        The host port on which the admin service should run.
-      -}
+      {- ^ The host port on which the admin service should run.  -}
   }
 
 
