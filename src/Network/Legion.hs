@@ -23,34 +23,39 @@
 -}
 
 module Network.Legion (
-  -- * Service Implementation
+  -- * Using Legion
+
+  -- ** Starting the Legion Runtime
+  -- $startup
+  forkLegionary,
+  StartupMode(..),
+  Runtime,
+
+  -- ** Runtime Configuration
+  -- $framework-config
+  RuntimeSettings(..),
+
+  -- ** Making Runtime Requests
+  makeRequest,
+  search,
+
+  -- * Implementing a Legion Application
   -- $service-implementaiton
 
   -- ** Indexing
   -- $indexing
-
   Legionary(..),
   LegionConstraints,
   Persistence(..),
   ApplyDelta(..),
   Tag(..),
-  -- * Invoking Legion
-  -- $invocation
-  forkLegionary,
-  StartupMode(..),
-  Runtime,
-  makeRequest,
-  search,
+
+  -- * Other Types
   SearchTag(..),
   IndexRecord(..),
-  -- * Fundamental Types
   PartitionKey(..),
   PartitionPowerState,
-  projected,
-  infimum,
-  -- * Framework Configuration
-  -- $framework-config
-  LegionarySettings(..),
+
   -- * Utils
   newMemoryPersistence,
   diskPersistence,
@@ -65,11 +70,11 @@ import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
 import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
   irTag, irKey), SearchTag(SearchTag, stTag, stKey))
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
-import Network.Legion.PartitionState (PartitionPowerState, infimum, projected)
+import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta(apply))
 import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
   forkLegionary, Runtime, makeRequest, search)
-import Network.Legion.Settings (LegionarySettings(LegionarySettings,
+import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 
 --------------------------------------------------------------------------------
@@ -187,7 +192,7 @@ import Network.Legion.Settings (LegionarySettings(LegionarySettings,
 
 --------------------------------------------------------------------------------
 
--- $invocation
+-- $startup
 -- While this section is being worked on, you can check out the
 -- [legion-cache](https://github.com/taphu/legion-cache) project for a
 -- working example of how to build a basic distributed key-value store

@@ -2,14 +2,14 @@
   This module contains the user settings.
 -}
 module Network.Legion.Settings (
-  LegionarySettings(..),
+  RuntimeSettings(..),
 ) where
 
 import Network.Socket (SockAddr)
 import Network.Wai.Handler.Warp (HostPreference, Port)
 
-{- | Settings used when starting up the legion framework.  -}
-data LegionarySettings = LegionarySettings {
+{- | Settings used when starting up the legion framework runtime.  -}
+data RuntimeSettings = RuntimeSettings {
     peerBindAddr :: SockAddr,
       {- ^
         The address on which the legion framework will listen for
@@ -21,13 +21,9 @@ data LegionarySettings = LegionarySettings {
         join requests.
       -}
     adminHost :: HostPreference,
-      {- ^
-        The host address on which the admin service should run.
-      -}
+      {- ^ The host address on which the admin service should run.  -}
     adminPort :: Port
-      {- ^
-        The host port on which the admin service should run.
-      -}
+      {- ^ The host port on which the admin service should run.  -}
   }
 
 
