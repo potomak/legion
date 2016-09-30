@@ -123,8 +123,14 @@ The Legion framework is still experimental.
 
 ### Examples
 
-Check out the [legion-cache](https://github.com/taphu/legion-cache) project for
-an example of how to build a basic distributed key-value store with legion.
+Check out the
+[legion-discovery](https://github.com/owensmurray/legion-discovery)
+project for an example of a stateful web services that advantage of
+Legion's ability to define your own operations on your data. Take a look at
+[`Network.Legion.Discovery.App`](https://github.com/owensmurray/legion-discovery/blob/master/src/Network/Legion/Discovery/App.hs)
+to see where the magic of defining a Legion application happens. The rest
+of the code is mostly just standard HTTP-interface-written-in-Haskell,
+and requests sent to the Legion runtime.
 
 ## FAQ
 

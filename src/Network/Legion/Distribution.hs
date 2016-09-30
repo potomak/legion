@@ -126,6 +126,12 @@ rebalanceAction self allPeers (D dist) =
     _rebalance = error "rebalance undefined"
     rebuild =
       let
+        {- |
+          Figure out if there are any under-served partitions and also
+          figure out if this peer is the best candidate to service
+          them. "Under served" means that the partition isn't replicated
+          enough times, where "enough" is the magic number 3.
+        -}
         underserved = [
             (ks, ps)
             | (ks, ps) <- dist
@@ -137,7 +143,16 @@ rebalanceAction self allPeers (D dist) =
         [] -> Nothing
         (ks, ps):_ ->
           let
+            {- |
+              Any peer that is not currently servicing the keyspace
+              segment is a candidate.
+            -}
             candidateHosts = toList (allPeers Set.\\ ps)
+
+            {- |
+              The best candidate is the one that currently has the
+              least load.
+            -}
             bestHosts = sort [(weightOf p, p) | p <- candidateHosts]
           in case bestHosts of
             {- we are the best host -}

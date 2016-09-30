@@ -2,15 +2,15 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                legion
-version:             0.4.0.0
+version:             0.5.0.0
 synopsis:            Distributed, stateful, homogeneous microservice framework.
 description:         Legion is a framework for writing distributed,
                      homogeneous, stateful microservices in Haskell.
-homepage:            https://github.com/taphu/legion
+homepage:            https://github.com/owensmurray/legion#readme
 license:             Apache-2.0
 license-file:        LICENSE
 author:              Rick Owens
-maintainer:          rick@owenssoftware.com
+maintainer:          rick@owensmurray.com
 copyright:           2015-2016 Rick Owens
 category:            Concurrency, Network
 stability:           experimental
@@ -20,7 +20,7 @@ cabal-version:       >=1.10
 
 source-repository head
   type: git
-  location: git@github.com:taphu/legion.git
+  location: git@github.com:owensmurray/legion.git
 
 library
   exposed-modules:
