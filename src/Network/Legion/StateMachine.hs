@@ -181,7 +181,7 @@ userRequest key request = SM $ do
     then do
       partition <- unSM $ getPartition key
       let
-        response = handleRequest key request (P.ask partition)
+        response = handleRequest request (P.ask partition)
         partition2 = P.delta request partition
       unSM $ savePartition key partition2
       return (Respond response)

@@ -51,7 +51,7 @@ data Legionary i o s = Legionary {
 
       Given a request and a state, returns a response to the request.
     -}
-    handleRequest :: PartitionKey -> i -> s -> o,
+    handleRequest :: i -> s -> o,
 
     {- | The user-defined persistence layer implementation. -}
     persistence :: Persistence i s,
