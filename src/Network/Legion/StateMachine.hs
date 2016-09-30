@@ -325,7 +325,13 @@ rebalance = SM $ do
   (lift . put) ns {
       cluster = case action of
         Nothing -> cluster
-        Just (Invite ks) -> C.claimParticipation self ks cluster
+        Just (Invite ks) ->
+          {-
+            This 'claimParticipation' will be enforced by the remote
+            peers, because those peers will see the change in distribution
+            and then perform a 'migrate'.
+          -}
+          C.claimParticipation self ks cluster
     }
 
 
