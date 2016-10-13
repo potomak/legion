@@ -103,19 +103,19 @@ following characteristics:
 
 - Meet Semilattices.
 
-  TODO: fill out this section.
+  *Comming Soon.*
 
 - Pure Haskell Interface.
 
-  TODO: fill out this section.
+  *Comming Soon.*
 
 - Automatic Rebalancing.
 
-  TODO: fill out this section.
+  *Comming Soon.*
 
 - Replication.
 
-  TODO: fill out this section.
+  *Comming Soon.*
 
 ## Development Status
 
