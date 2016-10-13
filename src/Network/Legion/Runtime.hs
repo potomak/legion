@@ -573,8 +573,8 @@ startPeerListener RuntimeSettings {peerBindAddr} =
 
 
 {- | Figure out how to construct the initial node state.  -}
-makeNodeState :: (Show i)
-  => RuntimeSettings
+makeNodeState
+  :: RuntimeSettings
   -> StartupMode
   -> LIO (Peer, NodeState i s, Map Peer BSockAddr)
 

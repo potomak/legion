@@ -26,7 +26,7 @@ Why is it hard to write stateful microservices *without* resorting to
 the DB?  Well, for the same reason it is hard to write a distributed
 database in the first place. If you are storing state, you have to
 worry about scaling that state by distributing it across a cluster,
-ensuring the durability replicating the state, and routing requests
+ensuring the durability by replicating the state, and routing requests
 to the location where the state is stored.  You have to worry about
 nodes entering an exiting the cluster, and how the state is repaired
 and rebalanced when the cluster topology changes.
