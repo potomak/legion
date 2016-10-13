@@ -104,7 +104,7 @@ ask = projectedValue . powerState
 {- |
   Create a new propagation state based on an existing power state.
 -}
-initProp :: (ApplyDelta d s, Eq p, Ord p)
+initProp :: (ApplyDelta d s, Ord p)
   => p
   -> PropPowerState o s p d
   -> PropState o s p d
