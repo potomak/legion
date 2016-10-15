@@ -97,13 +97,35 @@ following characteristics:
   in fact choosing A and P is basically the whole point of why many
   distributed databases exist in the first place. However, distributed
   DBs don't offer eventual consistency over **arbitrary user-defined
-  semantics**. See "Consistency Is Still a Problem" above. Being
+  operations**. See "Consistency Is Still a Problem" above. Being
   eventually consistent with arbitrary semantics is a lot harder than with
   "last write wins".
 
 - Meet Semilattices.
 
-  *Comming Soon.*
+  Legion stores incoming requests as a set of (user-defined) events*
+  organized into a meet-semilattice, with monotonically increasing event
+  ids, and a monotonically increasing set of peer acknowledgements for
+  each event. This is important for two reasons. The first is because it
+  allows us to rewrite the order of events in the case of conflict while
+  maintaining the user-defined event semantics, giving us Strong Eventual
+  Consistency. The second is because, unlike similar schemes layered on
+  top of an external database, it allows us to compute a Greatest Lower
+  Bound (or [infimum](https://en.wikipedia.org/wiki/Infimum_and_supremum))
+  for the user-defined partition value (or "object value", or "state
+  value", as some people think of it) encapsulated implicitly in the
+  event semilattice. This is the same as saying that it allows us to
+  do garbage collections, because it is not possible for a new events
+  to arrive that fall below the infimum. In other words, while it is
+  possible for new events to arrive at a given peer out of their natural
+  order, it is guaranteed that all events arriving in the future must
+  be above the infimum, and that there are no possible events that fall
+  below the infimum which the peer has not already seen. Therefore,
+  we are free to collapse and discard all events below the infimum.
+
+  \* "Events" are user-defined pieces of code that accept the current
+  partition value as input, and produce some kind of response along with
+  a new partition value as output.
 
 - Pure Haskell Interface.
 
@@ -125,7 +147,7 @@ The Legion framework is still experimental.
 
 Check out the
 [legion-discovery](https://github.com/owensmurray/legion-discovery)
-project for an example of a stateful web services that advantage of
+project for an example of a stateful web services that takes advantage of
 Legion's ability to define your own operations on your data. Take a look at
 [`Network.Legion.Discovery.App`](https://github.com/owensmurray/legion-discovery/blob/master/src/Network/Legion/Discovery/App.hs)
 to see where the magic of defining a Legion application happens. The rest
