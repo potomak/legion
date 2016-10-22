@@ -128,8 +128,8 @@ setServer = addServerHeader . stripServerHeader
   The type of messages sent by the admin service.
 -}
 data AdminMessage i o s
-  = GetState (NodeState i s -> LIO ())
-  | GetPart PartitionKey (Maybe (PartitionPowerState i s) -> LIO ())
+  = GetState (NodeState i o s -> LIO ())
+  | GetPart PartitionKey (Maybe (PartitionPowerState i o s) -> LIO ())
   | Eject Peer (() -> LIO ())
 
 instance Show (AdminMessage i o s) where

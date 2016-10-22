@@ -33,7 +33,7 @@ import qualified Data.Map as Map
   A convenient memory-based persistence layer. Good for testing or for
   applications (like caches) that don't have durability requirements.
 -}
-newMemoryPersistence :: IO (Persistence i s)
+newMemoryPersistence :: IO (Persistence i o s)
 
 newMemoryPersistence = do
     cacheT <- atomically (newTVar Map.empty)
@@ -44,9 +44,9 @@ newMemoryPersistence = do
       }
   where
     saveState_
-      :: TVar (Map PartitionKey (PartitionPowerState i s))
+      :: TVar (Map PartitionKey (PartitionPowerState i o s))
       -> PartitionKey
-      -> Maybe (PartitionPowerState i s)
+      -> Maybe (PartitionPowerState i o s)
       -> IO ()
     saveState_ cacheT key (Just state) =
       (atomically . modifyTVar cacheT . insert key) state
@@ -55,15 +55,15 @@ newMemoryPersistence = do
       (atomically . modifyTVar cacheT . Map.delete) key
 
     fetchState
-      :: TVar (Map PartitionKey (PartitionPowerState i s))
+      :: TVar (Map PartitionKey (PartitionPowerState i o s))
       -> PartitionKey
-      -> IO (Maybe (PartitionPowerState i s))
+      -> IO (Maybe (PartitionPowerState i o s))
     fetchState cacheT key = atomically $
       lookup key <$> readTVar cacheT
 
     list_
-      :: TVar (Map PartitionKey (PartitionPowerState i s))
-      -> Source IO (PartitionKey, PartitionPowerState i s)
+      :: TVar (Map PartitionKey (PartitionPowerState i o s))
+      -> Source IO (PartitionKey, PartitionPowerState i o s)
     list_ cacheT =
       sourceList . Map.toList =<< lift (atomically (readTVar cacheT))
 
@@ -72,7 +72,7 @@ newMemoryPersistence = do
 diskPersistence :: (Binary i, Binary s)
   => FilePath
     -- ^ The directory under which partition states will be stored.
-  -> Persistence i s
+  -> Persistence i o s
 
 diskPersistence directory = Persistence {
       getState,
@@ -82,7 +82,7 @@ diskPersistence directory = Persistence {
   where
     getState :: (Binary i, Binary s)
       => PartitionKey
-      -> IO (Maybe (PartitionPowerState i s))
+      -> IO (Maybe (PartitionPowerState i o s))
     getState key =
       let path = toPath key in
       doesFileExist path >>= bool
@@ -91,7 +91,7 @@ diskPersistence directory = Persistence {
 
     saveState :: (Binary i, Binary s)
       => PartitionKey
-      -> Maybe (PartitionPowerState i s)
+      -> Maybe (PartitionPowerState i o s)
       -> IO ()
     saveState key (Just state) =
       writeFile (toPath key) (toStrict (encode state))
@@ -102,7 +102,7 @@ diskPersistence directory = Persistence {
         (removeFile path)
 
     list :: (Binary i, Binary s)
-      => Source IO (PartitionKey, PartitionPowerState i s)
+      => Source IO (PartitionKey, PartitionPowerState i o s)
     list = do
         keys <- lift $ readHexList <$> getDirectoryContents directory
         sourceList keys =$= fillData

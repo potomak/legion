@@ -46,7 +46,7 @@ instance (Binary i, Binary o, Binary s) => Binary (PeerMessage i o s)
   cluster and the blacklisting of that node so that it can never re-join.
 -}
 data PeerMessagePayload i o s
-  = PartitionMerge PartitionKey (PartitionPowerState i s)
+  = PartitionMerge PartitionKey (PartitionPowerState i o s)
   | ForwardRequest PartitionKey i
   | ForwardResponse MessageId o
   | ClusterMerge ClusterPowerState

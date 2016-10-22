@@ -44,7 +44,7 @@ module Network.Legion (
 
   -- ** Indexing
   -- $indexing
-  Legionary(..),
+  Indexable(..),
   LegionConstraints,
   Persistence(..),
   ApplyDelta(..),
@@ -64,11 +64,11 @@ module Network.Legion (
 import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Network.Legion.Application (LegionConstraints,
-  Persistence(Persistence, getState, saveState, list),
-  Legionary(Legionary, persistence, handleRequest, index))
+  Persistence(Persistence, getState, saveState, list))
 import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
 import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
-  irTag, irKey), SearchTag(SearchTag, stTag, stKey))
+  irTag, irKey), SearchTag(SearchTag, stTag, stKey),
+  Indexable(indexEntries))
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
 import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta(apply))
@@ -112,58 +112,27 @@ import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
 -- part of your application, that transparently handles all of the hard
 -- stateful stuff, like replication, rebalancing, request routing, etc.
 --
--- The only thing required to implement a legion service is to
--- provide a request handler and a persistence layer by constructing a
--- 'Legionary' value and passing it to 'forkLegionary'. The stateful
--- part of your application will live mostly within the request handler
--- 'handleRequest'. If you look at 'handleRequest', you will see that
--- it is abstract over the type variables @i@, @o@, and @s@.
---
--- > handleRequest :: PartitionKey -> i -> s -> o
---
--- These are the types your application has to fill in. @i@ stands for
--- "input", which is the type of requests your application accepts; @o@
--- stands for "output", which is the type of responses your application
--- will generate in response to those requests, and @s@ stands for "state",
--- which is the application state that each partition can assume.
---
+-- The only thing required to implement a legion service is to implement
+-- a few typeclasses and call 'forkLegionary'. The state-aware part of
+-- your application will live mostly within the request handler, which
+-- is implemented via a typeclass `ApplyDelta`.
+-- 
+-- > class ApplyDelta i o s | i s -> o where
+-- >   apply :: i -> s -> (o, s)
+-- 
+-- If you look at 'apply', you will see that it is abstract over the type
+-- variables @i@, @o@, and @s@.  These are the types your application
+-- has to fill in. @i@ stands for "input", which is the type of requests
+-- your application accepts; @o@ stands for "output", which is the type of
+-- responses your application will generate in response to those requests,
+-- and @s@ stands for "state", which is the application state that each
+-- partition can assume.
+-- 
 -- Implementing a request handler is pretty straight forward, but
 -- there is a little bit more to it than meets the eye. If you look at
 -- 'forkLegionary', you will see a constraint named @'LegionConstraints'
--- i o s@, which is short-hand for a long list of typeclasses that
--- your @i@, @o@, and @s@ types are going to have to implement. Of
--- particular interest is the 'ApplyDelta' typeclass. If you look at
--- 'handleRequest', you will see that it is defined in terms of an input,
--- an existing state, and an output, but there is no mention of any /new/
--- state that is generated as a result of handling the request.
---
--- This is where the 'ApplyDelta' typeclass comes in. Where 'handleRequest'
--- takes an input and a state and produces an output, the 'apply' function
--- of the 'ApplyDelta' typeclass takes an input and a state and produces
--- a new state.
---
--- > apply :: i -> s -> s
---
--- The reason that Legion splits the definition of what it means to
--- fully handle an input into two functions like this is because of the
--- approach it takes to solving distributed systems problems. Describing
--- this entirely is beyond the scope of this section of documentation
--- (TODO link to more info) but the TL;DR is that 'handleRequest' will
--- only get called once for each input, but 'apply' has a very good
--- chance of being called more than once for various reasons including
--- re-playing the application of requests to resolve non-determinism.
---
--- Taking yet another look at 'handleRequest', you will see that it
--- makes no provision for a non-existent partition state (i.e., it is
--- written in terms of @s@, not @Maybe s@. Same goes for 'ApplyDelta').
--- This framework takes the somewhat platonic philosophical view that all
--- mathematical values exist somewhere and that there is no such thing as
--- non-existent partition. When you first spin up a Legion application,
--- all of those partitions are going to have a default value, which is
--- 'Data.Default.Class.def' (Because your partition state must be an
--- instance of the 'Data.Default.Class.Default' typeclass). This doesn't
--- take up infinite disk space because 'Data.Default.Class.def' values
--- are cleverly encoded as a zero-length string of bytes. ;-)
+-- i o s@, which is short-hand for a long list of typeclasses that your
+-- @i@, @o@, and @s@ types are going to have to implement.
 --
 -- The persistence layer provides the framework with a way to store the
 -- various partition states. This allows you to choose any number of
@@ -181,14 +150,19 @@ import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
 -- the partition key a priori. Conceptually, the "index" is a single,
 -- global, ordered list of 'IndexRecord's. The 'search' function allows
 -- you to scroll forward through this list at will.
+--
+-- Indexing is implemented by instantiating the 'Indexable' typeclass
+-- for your state type.
+--
+-- > class Indexable s where
+-- >   indexEntries :: s -> Set Tag
+--
+-- The tags returned by 'indexEntries' is used to construct a set of zero
+-- or more 'IndexRecord's. For each 'Tag' returned by 'indexEntries',
+-- an 'IndexRecord' is generated such that:
 -- 
--- Each partition may generate zero or more 'IndexRecord's. This
--- is determined by the 'index' function, which is defined by your
--- specific Legion application. For each 'Tag' returned by 'index', an
--- 'IndexRecord' is generated such that:
--- 
--- > @IndexRecord {irTag = <your tag>, irKey = <partition key>}@
--- 
+-- > IndexRecord {irTag = <your tag>, irKey = <partition key>}
+   
 
 --------------------------------------------------------------------------------
 

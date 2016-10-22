@@ -4,14 +4,26 @@
 module Network.Legion.Index (
   Tag(..),
   IndexRecord(..),
+  Indexable(..),
   SearchTag(..),
 ) where
 
 import Data.Binary (Binary)
 import Data.ByteString (ByteString)
+import Data.Set (Set)
 import Data.String (IsString)
 import GHC.Generics (Generic)
 import Network.Legion.PartitionKey (PartitionKey)
+
+
+{- | This typeclass provides the ability to index partition states. -}
+class Indexable s where
+  {- |
+    A way of indexing partitions so that they can be found without knowing
+    the partition key. An index entry for the partition will be created
+    under each of the tags returned by this function.
+  -}
+  indexEntries :: s -> Set Tag
 
 
 {- |
