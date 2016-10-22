@@ -37,8 +37,7 @@ import Data.Text (pack)
 import GHC.Generics (Generic)
 import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
   Eject))
-import Network.Legion.Application (LegionConstraints,
-  Legionary(Legionary), persistence, getState)
+import Network.Legion.Application (LegionConstraints, getState, Persistence)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
@@ -84,10 +83,10 @@ import qualified Network.Legion.StateMachine as SM
   what you are doing, you probably want to use `forkLegionary` instead.
 -}
 runLegionary :: (LegionConstraints i o s)
-  => Legionary i o s
-    {- ^ The user-defined legion application to run.  -}
+  => Persistence i o s
+    {- ^ The persistence layer used to back the legion framework. -}
   -> RuntimeSettings
-    {- ^ Settings and configuration of the legionary framework.  -}
+    {- ^ Settings and configuration of the legionframework.  -}
   -> StartupMode
   -> Source IO (RequestMsg i o)
     {- ^ A source of requests, together with a way to respond to the requets. -}
@@ -98,7 +97,7 @@ runLegionary :: (LegionConstraints i o s)
     -}
 
 runLegionary
-    legionary
+    persistence
     settings@RuntimeSettings {adminHost, adminPort}
     startupMode
     requestSource
@@ -123,7 +122,7 @@ runLegionary
     runConduit $
       (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
         =$= CL.map toMessage
-        =$= messageSink legionary (rts, nodeState)
+        =$= messageSink persistence (rts, nodeState)
   where
     toMessage
       :: Either
@@ -164,19 +163,19 @@ instance (Show i) => Show (RequestMsg i o) where
 
 
 messageSink :: (LegionConstraints i o s)
-  => Legionary i o s
+  => Persistence i o s
   -> (RuntimeState i o s, NodeState i o s)
   -> Sink (RuntimeMessage i o s) LIO ()
-messageSink legionary states =
+messageSink persistence states =
     await >>= \case
       Nothing -> return ()
       Just msg -> do
         $(logDebug) . pack
           $ "Receieved: " ++ show msg
-        lift . handleMessage legionary msg
-          >=> lift . updatePeers legionary
-          >=> lift . clusterHousekeeping legionary
-          >=> messageSink legionary
+        lift . handleMessage persistence msg
+          >=> lift . updatePeers persistence
+          >=> lift . clusterHousekeeping persistence
+          >=> messageSink persistence
           $ states
 
 
@@ -185,11 +184,11 @@ messageSink legionary states =
   joined the cluster.
 -}
 updatePeers
-  :: Legionary i o s
+  :: Persistence i o s
   -> (RuntimeState i o s, NodeState i o s)
   -> LIO (RuntimeState i o s, NodeState i o s)
-updatePeers legionary (rts, ns) = do
-  (peers, ns2) <- runSM legionary ns SM.getPeers
+updatePeers persistence (rts, ns) = do
+  (peers, ns2) <- runSM persistence ns SM.getPeers
   newPeers (cm rts) peers
   return (rts, ns2)
 
@@ -199,11 +198,11 @@ updatePeers legionary (rts, ns) = do
   appropriately.
 -}
 clusterHousekeeping :: (LegionConstraints i o s)
-  => Legionary i o s
+  => Persistence i o s
   -> (RuntimeState i o s, NodeState i o s)
   -> LIO (RuntimeState i o s, NodeState i o s)
-clusterHousekeeping legionary (rts, ns) = do
-    (actions, ns2) <- runSM legionary ns (
+clusterHousekeeping persistence (rts, ns) = do
+    (actions, ns2) <- runSM persistence ns (
         heartbeat
         >> rebalance
         >> migrate
@@ -243,33 +242,33 @@ clusterAction
   state and node state.
 -}
 handleMessage :: (LegionConstraints i o s)
-  => Legionary i o s
+  => Persistence i o s
   -> RuntimeMessage i o s
   -> (RuntimeState i o s, NodeState i o s)
   -> LIO (RuntimeState i o s, NodeState i o s)
 
 handleMessage {- Partition Merge -}
-    legionary
+    persistence
     (P (PeerMessage source _ (PartitionMerge key ps)))
     (rts, ns)
   = do
-    ((), ns2) <- runSM legionary ns (partitionMerge source key ps)
+    ((), ns2) <- runSM persistence ns (partitionMerge source key ps)
     return (rts, ns2)
 
 handleMessage {- Cluster Merge -}
-    legionary
+    persistence
     (P (PeerMessage source _ (ClusterMerge cs)))
     (rts, ns)
   = do
-    ((), ns2) <- runSM legionary ns (clusterMerge source cs)
+    ((), ns2) <- runSM persistence ns (clusterMerge source cs)
     return (rts, ns2)
 
 handleMessage {- Forward Request -}
-    legionary
+    persistence
     (P (msg@(PeerMessage source mid (ForwardRequest key request))))
     (rts@RuntimeState {nextId, cm, self}, ns)
   = do
-    (output, ns2) <- runSM legionary ns (userRequest key request)
+    (output, ns2) <- runSM persistence ns (userRequest key request)
     case output of
       Respond response -> do
         send cm source (
@@ -294,11 +293,11 @@ handleMessage {- Forward Response -}
         return (rts {forwarded = fwd}, ns)
 
 handleMessage {- User Request -}
-    legionary
+    persistence
     (R (Request key request respond))
     (rts@RuntimeState {self, cm, nextId, forwarded}, ns)
   = do
-    (output, ns2) <- runSM legionary ns (userRequest key request)
+    (output, ns2) <- runSM persistence ns (userRequest key request)
     case output of
       Respond response -> do
         lift (respond response)
@@ -320,7 +319,7 @@ handleMessage {- Search Dispatch -}
       This is where we send out search request to all the appropriate
       nodes in the cluster.
     -}
-    legionary
+    persistence
     (R (SearchDispatch searchTag respond))
     (rts@RuntimeState {cm, self, searches}, ns)
   =
@@ -330,7 +329,7 @@ handleMessage {- Search Dispatch -}
           No identical search is currently being executed, kick off a
           new one.
         -}
-        (mcss, ns2) <- runSM legionary ns minimumCompleteServiceSet 
+        (mcss, ns2) <- runSM persistence ns minimumCompleteServiceSet 
         rts2 <- foldr (>=>) return (sendOne <$> Set.toList mcss) rts
         return (
             rts2 {
@@ -363,11 +362,11 @@ handleMessage {- Search Dispatch -}
 
 handleMessage {- Search Execution -}
     {- This is where we handle local search execution. -}
-    legionary
+    persistence
     (P (PeerMessage source _ (Search searchTag)))
     (rts@RuntimeState {nextId, cm, self}, ns)
   = do
-    (output, ns2) <- runSM legionary ns (SM.search searchTag) 
+    (output, ns2) <- runSM persistence ns (SM.search searchTag) 
     send cm source (PeerMessage self nextId (SearchResponse searchTag output))
     return (rts {nextId = nextMessageId nextId}, ns2)
 
@@ -432,11 +431,11 @@ handleMessage {- Search Response -}
     bestOf a Nothing = a
 
 handleMessage {- Join Request -}
-    legionary
+    persistence
     (J (JoinRequest addy, respond))
     (rts, ns)
   = do
-    ((peer, cluster), ns2) <- runSM legionary ns (SM.join addy)
+    ((peer, cluster), ns2) <- runSM persistence ns (SM.join addy)
     respond (JoinOk peer cluster)
     return (rts, ns2)
 
@@ -448,7 +447,7 @@ handleMessage {- Admin Get State -}
     respond ns >> return (rts, ns)
 
 handleMessage {- Admin Get Partition -}
-    Legionary {persistence}
+    persistence
     (A (GetPart key respond))
     (rts, ns)
   = do
@@ -456,7 +455,7 @@ handleMessage {- Admin Get Partition -}
     return (rts, ns)
 
 handleMessage {- Admin Eject Peer -}
-    legionary
+    persistence
     (A (Eject peer respond))
     (rts, ns)
   = do
@@ -483,7 +482,7 @@ handleMessage {- Admin Eject Peer -}
       "next state id" for a peer were global across all power states
       instead of local to each power state?
     -}
-    ((), ns2) <- runSM legionary ns (eject peer)
+    ((), ns2) <- runSM persistence ns (eject peer)
     respond ()
     return (rts, ns2)
 
@@ -696,21 +695,29 @@ fam SockAddrCan {} = AF_CAN
 {- |
   Forks the legion framework in a background thread, and returns a way to
   send user requests to it and retrieve the responses to those requests.
+
+  - @__i__@ is the type of request your application will handle. @__i__@ stands
+    for __"input"__.
+  - @__o__@ is the type of response produced by your application. @__o__@ stands
+    for __"output"__
+  - @__s__@ is the type of state maintained by your application. More
+    precisely, it is the type of the individual partitions that make up
+    your global application state. @__s__@ stands for __"state"__.
 -}
 forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
-  => Legionary i o s
-    {- ^ The user-defined legion application to run. -}
+  => Persistence i o s
+    {- ^ The persistence layer used to back the legion framework. -}
   -> RuntimeSettings
-    {- ^ Settings and configuration of the legionary framework. -}
+    {- ^ Settings and configuration of the legion framework. -}
   -> StartupMode
   -> io (Runtime i o)
 
-forkLegionary legionary settings startupMode = do
+forkLegionary persistence settings startupMode = do
   logging <- askLoggerIO
   liftIO . (`runLoggingT` logging) $ do
     chan <- liftIO newChan
     forkC "main legion thread" $
-      runLegionary legionary settings startupMode (chanToSource chan)
+      runLegionary persistence settings startupMode (chanToSource chan)
     return Runtime {
         rtMakeRequest = \key request -> liftIO $ do
           responseVar <- newEmptyMVar

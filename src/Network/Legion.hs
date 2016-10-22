@@ -44,7 +44,6 @@ module Network.Legion (
 
   -- ** Indexing
   -- $indexing
-  Legionary(..),
   Indexable(..),
   LegionConstraints,
   Persistence(..),
@@ -65,8 +64,7 @@ module Network.Legion (
 import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Network.Legion.Application (LegionConstraints,
-  Persistence(Persistence, getState, saveState, list),
-  Legionary(Legionary, persistence))
+  Persistence(Persistence, getState, saveState, list))
 import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
 import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
   irTag, irKey), SearchTag(SearchTag, stTag, stKey),

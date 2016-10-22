@@ -77,8 +77,7 @@ import Data.Set (Set, (\\))
 import Data.Text (pack, unpack)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Time.Clock (getCurrentTime)
-import Network.Legion.Application (Legionary(Legionary), getState,
-  saveState, list, persistence)
+import Network.Legion.Application (getState, saveState, list, Persistence)
 import Network.Legion.BSockAddr (BSockAddr)
 import Network.Legion.ClusterState (ClusterPropState, ClusterPowerState)
 import Network.Legion.Distribution (Peer, rebalanceAction, newPeer,
@@ -152,7 +151,7 @@ newNodeState self cluster =
   we have to do so using a monad.
 -}
 newtype SM i o s a = SM {
-    unSM :: ReaderT (Legionary i o s) (StateT (NodeState i o s) LIO) a
+    unSM :: ReaderT (Persistence i o s) (StateT (NodeState i o s) LIO) a
   }
   deriving (Functor, Applicative, Monad, MonadLogger, MonadIO)
 
@@ -161,11 +160,11 @@ newtype SM i o s a = SM {
   Run an SM action.
 -}
 runSM
-  :: Legionary i o s
+  :: Persistence i o s
   -> NodeState i o s
   -> SM i o s a
   -> LIO (a, NodeState i o s)
-runSM l ns action = runStateT (runReaderT (unSM action) l) ns
+runSM p ns action = runStateT (runReaderT (unSM action) p) ns
 
 
 {- | Handle a user request. -}
@@ -246,7 +245,7 @@ clusterMerge source foreignCluster = SM . lift $ do
 migrate :: (Default s, ApplyDelta i o s, Indexable s) => SM i o s ()
 migrate = do
     NodeState {migration} <- (SM . lift) get
-    Legionary {persistence} <- SM ask
+    persistence <- SM ask
     unless (KS.null migration) $
       transPipe (SM . lift3) (list persistence)
       $= CL.filter ((`KS.member` migration) . fst)
@@ -436,7 +435,7 @@ getPartition :: (Default s, ApplyDelta i o s)
   => PartitionKey
   -> SM i o s (PartitionPropState i o s)
 getPartition key = SM $ do
-  Legionary {persistence} <- ask
+  persistence <- ask
   NodeState {self, partitions, cluster} <- lift get
   case Map.lookup key partitions of
     Nothing ->
@@ -455,7 +454,7 @@ savePartition :: (Default s, ApplyDelta i o s, Indexable s)
   -> PartitionPropState i o s
   -> SM i o s ()
 savePartition key partition = SM $ do
-  Legionary {persistence} <- ask
+  persistence <- ask
   oldTags <- indexEntries . P.ask <$> unSM (getPartition key)
   let
     currentTags = indexEntries (P.ask partition)
