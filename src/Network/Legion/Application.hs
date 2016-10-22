@@ -23,12 +23,12 @@ import Network.Legion.PowerState (ApplyDelta)
   constraints
 
   > (
-  >   ApplyDelta i s, Default s, Binary i, Binary o, Binary s, Show i,
+  >   ApplyDelta i o s, Default s, Binary i, Binary o, Binary s, Show i,
   >   Show o, Show s, Eq i
   > )
 -}
 type LegionConstraints i o s = (
-    ApplyDelta i s, Default s, Binary i, Binary o, Binary s, Show i,
+    ApplyDelta i o s, Default s, Binary i, Binary o, Binary s, Show i,
     Show o, Show s, Eq i
   )
 
@@ -46,15 +46,8 @@ type LegionConstraints i o s = (
     your global application state. @__s__@ stands for __"state"__.
 -}
 data Legionary i o s = Legionary {
-    {- |
-      The request handler, implemented by the user to service requests.
-
-      Given a request and a state, returns a response to the request.
-    -}
-    handleRequest :: i -> s -> o,
-
     {- | The user-defined persistence layer implementation. -}
-    persistence :: Persistence i s,
+    persistence :: Persistence i o s,
 
     {- |
       A way of indexing partitions so that they can be found without
@@ -70,10 +63,10 @@ data Legionary i o s = Legionary {
   partition states. See 'Network.Legion.newMemoryPersistence' or
   'Network.Legion.diskPersistence' if you need to get started quickly.
 -}
-data Persistence i s = Persistence {
-     getState :: PartitionKey -> IO (Maybe (PartitionPowerState i s)),
-    saveState :: PartitionKey -> Maybe (PartitionPowerState i s) -> IO (),
-         list :: Source IO (PartitionKey, PartitionPowerState i s)
+data Persistence i o s = Persistence {
+     getState :: PartitionKey -> IO (Maybe (PartitionPowerState i o s)),
+    saveState :: PartitionKey -> Maybe (PartitionPowerState i o s) -> IO (),
+         list :: Source IO (PartitionKey, PartitionPowerState i o s)
       {- ^
         List all the keys known to the persistence layer. It is important
         that the implementation do the right thing with regard to

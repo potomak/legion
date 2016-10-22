@@ -165,7 +165,7 @@ instance (Show i) => Show (RequestMsg i o) where
 
 messageSink :: (LegionConstraints i o s)
   => Legionary i o s
-  -> (RuntimeState i o s, NodeState i s)
+  -> (RuntimeState i o s, NodeState i o s)
   -> Sink (RuntimeMessage i o s) LIO ()
 messageSink legionary states =
     await >>= \case
@@ -186,8 +186,8 @@ messageSink legionary states =
 -}
 updatePeers
   :: Legionary i o s
-  -> (RuntimeState i o s, NodeState i s)
-  -> LIO (RuntimeState i o s, NodeState i s)
+  -> (RuntimeState i o s, NodeState i o s)
+  -> LIO (RuntimeState i o s, NodeState i o s)
 updatePeers legionary (rts, ns) = do
   (peers, ns2) <- runSM legionary ns SM.getPeers
   newPeers (cm rts) peers
@@ -200,8 +200,8 @@ updatePeers legionary (rts, ns) = do
 -}
 clusterHousekeeping :: (LegionConstraints i o s)
   => Legionary i o s
-  -> (RuntimeState i o s, NodeState i s)
-  -> LIO (RuntimeState i o s, NodeState i s)
+  -> (RuntimeState i o s, NodeState i o s)
+  -> LIO (RuntimeState i o s, NodeState i o s)
 clusterHousekeeping legionary (rts, ns) = do
     (actions, ns2) <- runSM legionary ns (
         heartbeat
@@ -218,7 +218,7 @@ clusterHousekeeping legionary (rts, ns) = do
   machine.
 -}
 clusterAction
-  :: ClusterAction i s
+  :: ClusterAction i o s
   -> RuntimeState i o s
   -> LIO (RuntimeState i o s)
 
@@ -245,8 +245,8 @@ clusterAction
 handleMessage :: (LegionConstraints i o s)
   => Legionary i o s
   -> RuntimeMessage i o s
-  -> (RuntimeState i o s, NodeState i s)
-  -> LIO (RuntimeState i o s, NodeState i s)
+  -> (RuntimeState i o s, NodeState i o s)
+  -> LIO (RuntimeState i o s, NodeState i o s)
 
 handleMessage {- Partition Merge -}
     legionary
@@ -576,7 +576,7 @@ startPeerListener RuntimeSettings {peerBindAddr} =
 makeNodeState
   :: RuntimeSettings
   -> StartupMode
-  -> LIO (Peer, NodeState i s, Map Peer BSockAddr)
+  -> LIO (Peer, NodeState i o s, Map Peer BSockAddr)
 
 makeNodeState RuntimeSettings {peerBindAddr} NewCluster = do
   {- Build a brand new node state, for the first node in a cluster. -}

@@ -75,7 +75,7 @@ instance ToJSON ClusterState where
   A representation of all possible cluster states.
 -}
 newtype ClusterPowerState = ClusterPowerState {
-    unPowerState :: PropPowerState UUID ClusterState Peer Update
+    unPowerState :: PropPowerState UUID ClusterState Peer Update ()
   } deriving (Show, Binary)
 
 
@@ -84,7 +84,7 @@ newtype ClusterPowerState = ClusterPowerState {
   cluster state.
 -}
 newtype ClusterPropState = ClusterPropState {
-    unPropState :: PropState UUID ClusterState Peer Update
+    unPropState :: PropState UUID ClusterState Peer Update ()
   } deriving (Show, ToJSON)
 
 
@@ -97,16 +97,16 @@ data Update
   | PeerEjected Peer
   deriving (Show, Generic)
 instance Binary Update
-instance ApplyDelta Update ClusterState where
+instance ApplyDelta Update () ClusterState where
   apply (PeerJoined peer addr) cs@ClusterState {peers} =
-    cs {peers = Map.insert peer addr peers}
+    ((), cs {peers = Map.insert peer addr peers})
   apply (Participating peer ks) cs@ClusterState {distribution} =
-    cs {distribution = modify (Set.insert peer) ks distribution}
+    ((), cs {distribution = modify (Set.insert peer) ks distribution})
   apply (PeerEjected peer) cs@ClusterState {distribution, peers} =
-    cs {
+    ((), cs {
         distribution = modify (Set.delete peer) full distribution,
         peers = Map.delete peer peers
-      }
+      })
 
 
 {- |
