@@ -45,6 +45,7 @@ module Network.Legion (
   -- ** Indexing
   -- $indexing
   Legionary(..),
+  Indexable(..),
   LegionConstraints,
   Persistence(..),
   ApplyDelta(..),
@@ -65,10 +66,11 @@ import Prelude hiding (lookup, readFile, writeFile, null)
 
 import Network.Legion.Application (LegionConstraints,
   Persistence(Persistence, getState, saveState, list),
-  Legionary(Legionary, persistence, index))
+  Legionary(Legionary, persistence))
 import Network.Legion.Basics (newMemoryPersistence, diskPersistence)
 import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
-  irTag, irKey), SearchTag(SearchTag, stTag, stKey))
+  irTag, irKey), SearchTag(SearchTag, stTag, stKey),
+  Indexable(indexEntries))
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
 import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.PowerState (ApplyDelta(apply))
@@ -134,10 +136,6 @@ import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
 -- i o s@, which is short-hand for a long list of typeclasses that your
 -- @i@, @o@, and @s@ types are going to have to implement.
 --
--- In addition to implementing the typeclasses, you must also provide a
--- 'Legionary' value as a parameter to the 'forkLegionary' function. This
--- is a container for the persistence layer and indexing.
---
 -- The persistence layer provides the framework with a way to store the
 -- various partition states. This allows you to choose any number of
 -- persistence strategies, including only in memory, on disk, or in some
@@ -154,14 +152,19 @@ import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
 -- the partition key a priori. Conceptually, the "index" is a single,
 -- global, ordered list of 'IndexRecord's. The 'search' function allows
 -- you to scroll forward through this list at will.
+--
+-- Indexing is implemented by instantiating the 'Indexable' typeclass
+-- for your state type.
+--
+-- > class Indexable s where
+-- >   indexEntries :: s -> Set Tag
+--
+-- The tags returned by 'indexEntries' is used to construct a set of zero
+-- or more 'IndexRecord's. For each 'Tag' returned by 'indexEntries',
+-- an 'IndexRecord' is generated such that:
 -- 
--- Each partition may generate zero or more 'IndexRecord's. This
--- is determined by the 'index' function, which is defined by your
--- specific Legion application. For each 'Tag' returned by 'index', an
--- 'IndexRecord' is generated such that:
--- 
--- > @IndexRecord {irTag = <your tag>, irKey = <partition key>}@
--- 
+-- > IndexRecord {irTag = <your tag>, irKey = <partition key>}
+   
 
 --------------------------------------------------------------------------------
 

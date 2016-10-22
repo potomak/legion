@@ -78,13 +78,13 @@ import Data.Text (pack, unpack)
 import Data.Text.Encoding (decodeUtf8)
 import Data.Time.Clock (getCurrentTime)
 import Network.Legion.Application (Legionary(Legionary), getState,
-  saveState, list, persistence, index)
+  saveState, list, persistence)
 import Network.Legion.BSockAddr (BSockAddr)
 import Network.Legion.ClusterState (ClusterPropState, ClusterPowerState)
 import Network.Legion.Distribution (Peer, rebalanceAction, newPeer,
   RebalanceAction(Invite))
 import Network.Legion.Index (IndexRecord(IndexRecord), stTag, stKey,
-  irTag, irKey, SearchTag(SearchTag))
+  irTag, irKey, SearchTag(SearchTag), indexEntries, Indexable)
 import Network.Legion.KeySet (KeySet, union)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
@@ -169,7 +169,7 @@ runSM l ns action = runStateT (runReaderT (unSM action) l) ns
 
 
 {- | Handle a user request. -}
-userRequest :: (ApplyDelta i o s, Default s)
+userRequest :: (ApplyDelta i o s, Default s, Indexable s)
   => PartitionKey
   -> i
   -> SM i o s (UserResponse o)
@@ -197,7 +197,7 @@ userRequest key request = SM $ do
   Handle the state transition for a partition merge event. Returns 'Left'
   if there is an error, and 'Right' if everything went fine.
 -}
-partitionMerge :: (Show i, Show s, ApplyDelta i o s, Default s)
+partitionMerge :: (Show i, Show s, ApplyDelta i o s, Default s, Indexable s)
   => Peer
   -> PartitionKey
   -> PartitionPowerState i o s
@@ -243,7 +243,7 @@ clusterMerge source foreignCluster = SM . lift $ do
   peer to a partition. This will cause the data to be transfered in the
   normal course of propagation.
 -}
-migrate :: (Default s, ApplyDelta i o s) => SM i o s ()
+migrate :: (Default s, ApplyDelta i o s, Indexable s) => SM i o s ()
 migrate = do
     NodeState {migration} <- (SM . lift) get
     Legionary {persistence} <- SM ask
@@ -253,7 +253,7 @@ migrate = do
       $$ accum
     (SM . lift) $ modify (\ns -> ns {migration = KS.empty})
   where
-    accum :: (Default s, ApplyDelta i o s)
+    accum :: (Default s, ApplyDelta i o s, Indexable s)
       => Sink (PartitionKey, PartitionPowerState i o s) (SM i o s) ()
     accum = awaitForever $ \ (key, ps) -> do
       NodeState {self, cluster, partitions} <- (lift . SM . lift) get
@@ -450,15 +450,15 @@ getPartition key = SM $ do
   Saves a partition state. This function automatically handles the cache
   for active propagations, as well as reindexing of partitions.
 -}
-savePartition :: (Default s, ApplyDelta i o s)
+savePartition :: (Default s, ApplyDelta i o s, Indexable s)
   => PartitionKey
   -> PartitionPropState i o s
   -> SM i o s ()
 savePartition key partition = SM $ do
-  Legionary {persistence, index} <- ask
-  oldTags <- index . P.ask <$> unSM (getPartition key)
+  Legionary {persistence} <- ask
+  oldTags <- indexEntries . P.ask <$> unSM (getPartition key)
   let
-    currentTags = index (P.ask partition)
+    currentTags = indexEntries (P.ask partition)
     {- TODO: maybe use Set.mapMonotonic for performance?  -}
     obsoleteRecords = Set.map (flip IndexRecord key) (oldTags \\ currentTags)
     newRecords = Set.map (flip IndexRecord key) currentTags
