@@ -2,9 +2,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
-{- |
-  This module contains the fundamental distributed data object.
--}
+{- | This module contains the fundamental distributed data object. -}
 module Network.Legion.PowerState (
   PowerState,
   Infimum(..),
