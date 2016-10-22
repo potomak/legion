@@ -126,7 +126,7 @@ instance (Binary p, Binary d) => Binary (Delta p d)
 {- |
   The class which allows for delta application.
 -}
-class ApplyDelta i o s | i s -> o where
+class ApplyDelta i o s | i -> s o where
   {- |
     Apply a delta to a state value. *This function MUST be total!!!*
   -}
