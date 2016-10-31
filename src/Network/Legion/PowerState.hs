@@ -43,7 +43,9 @@ import qualified Data.Set as Set
 
 {- |
   This represents the set of all possible future values of @s@, in a
-  distributed, monotonically increasing environment.
+  distributed, monotonically increasing environment. The term "power
+  state" is chosen to indicate that values of this type represent multiple
+  possible values of the underlying user state @s@.
 -}
 data PowerState o s p d r = PowerState {
      origin :: o,
