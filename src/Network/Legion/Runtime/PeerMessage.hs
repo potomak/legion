@@ -28,13 +28,13 @@ import Network.Legion.UUID (getUUID)
 {- |
   The type of messages sent between peers.
 -}
-data PeerMessage i o s = PeerMessage {
+data PeerMessage e o s = PeerMessage {
        source :: Peer,
     messageId :: MessageId,
-      payload :: PeerMessagePayload i o s
+      payload :: PeerMessagePayload e o s
   }
   deriving (Generic, Show)
-instance (Binary i, Binary o, Binary s) => Binary (PeerMessage i o s)
+instance (Binary e, Binary o, Binary s) => Binary (PeerMessage e o s)
 
 
 {- |
@@ -45,15 +45,15 @@ instance (Binary i, Binary o, Binary s) => Binary (PeerMessage i o s)
   these messages should result in the ejection of that node from the
   cluster and the blacklisting of that node so that it can never re-join.
 -}
-data PeerMessagePayload i o s
-  = PartitionMerge PartitionKey (PartitionPowerState i o s)
-  | ForwardRequest PartitionKey i
+data PeerMessagePayload e o s
+  = PartitionMerge PartitionKey (PartitionPowerState e o s)
+  | ForwardRequest PartitionKey e
   | ForwardResponse MessageId o
   | ClusterMerge ClusterPowerState
   | Search SearchTag
   | SearchResponse SearchTag (Maybe IndexRecord)
   deriving (Generic, Show)
-instance (Binary i, Binary o, Binary s) => Binary (PeerMessagePayload i o s)
+instance (Binary e, Binary o, Binary s) => Binary (PeerMessagePayload e o s)
 
 
 data MessageId = M UUID Word64 deriving (Generic, Show, Eq, Ord)

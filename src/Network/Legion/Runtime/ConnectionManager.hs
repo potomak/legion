@@ -36,17 +36,17 @@ import Network.Socket.ByteString.Lazy (sendAll)
 {- |
   A handle on the connection manager
 -}
-data ConnectionManager i o s = C (Chan (Message i o s))
-instance Show (ConnectionManager i o s) where
+data ConnectionManager e o s = C (Chan (Message e o s))
+instance Show (ConnectionManager e o s) where
   show _ = "ConnectionManager"
 
 
 {- |
   Create a new connection manager.
 -}
-newConnectionManager :: (Binary i, Binary o, Binary s)
+newConnectionManager :: (Binary e, Binary o, Binary s)
   => Map Peer BSockAddr
-  -> LIO (ConnectionManager i o s)
+  -> LIO (ConnectionManager e o s)
 newConnectionManager initPeers = do
     chan <- lift newChan
     forkC "connection manager thread" $
@@ -55,16 +55,16 @@ newConnectionManager initPeers = do
     newPeers cm initPeers
     return cm
   where
-    manager :: (Binary s, Binary o, Binary i)
-      => Chan (Message i o s)
-      -> State i o s
+    manager :: (Binary s, Binary o, Binary e)
+      => Chan (Message e o s)
+      -> State e o s
       -> LIO ()
     manager chan state = lift (readChan chan) >>= handle state >>= manager chan
 
-    handle :: (Binary i, Binary o, Binary s)
-      => State i o s
-      -> Message i o s
-      -> LIO (State i o s)
+    handle :: (Binary e, Binary o, Binary s)
+      => State e o s
+      -> Message e o s
+      -> LIO (State e o s)
     handle s@S {connections} (NewPeer peer addr) =
       case lookup peer connections of
         Nothing -> do
@@ -85,9 +85,9 @@ newConnectionManager initPeers = do
 {- |
   Build a new connection.
 -}
-connection :: (Binary i, Binary o, Binary s)
+connection :: (Binary e, Binary o, Binary s)
   => SockAddr
-  -> LIO (Chan (PeerMessage i o s))
+  -> LIO (Chan (PeerMessage e o s))
 
 connection addr = do
     chan <- lift newChan
@@ -95,8 +95,8 @@ connection addr = do
       handle chan Nothing
     return chan
   where
-    handle :: (Binary i, Binary o, Binary s)
-      => Chan (PeerMessage i o s)
+    handle :: (Binary e, Binary o, Binary s)
+      => Chan (PeerMessage e o s)
       -> Maybe Socket
       -> LIO ()
     handle chan so =
@@ -152,9 +152,9 @@ connection addr = do
   Send a message to a peer.
 -}
 send
-  :: ConnectionManager i o s
+  :: ConnectionManager e o s
   -> Peer
-  -> PeerMessage i o s
+  -> PeerMessage e o s
   -> LIO ()
 send (C chan) peer = lift . writeChan chan . Send peer
 
@@ -163,7 +163,7 @@ send (C chan) peer = lift . writeChan chan . Send peer
   Tell the connection manager about a new peer.
 -}
 newPeer
-  :: ConnectionManager i o s
+  :: ConnectionManager e o s
   -> Peer
   -> SockAddr
   -> LIO ()
@@ -173,7 +173,7 @@ newPeer (C chan) peer addr = lift $ writeChan chan (NewPeer peer addr)
 {- |
   Tell the connection manager about all the peers known to the cluster state.
 -}
-newPeers :: ConnectionManager i o s -> Map Peer BSockAddr -> LIO ()
+newPeers :: ConnectionManager e o s -> Map Peer BSockAddr -> LIO ()
 newPeers cm peers =
     mapM_ oneNewPeer (toList peers)
   where
@@ -183,17 +183,17 @@ newPeers cm peers =
 {- |
   The internal state of the connection manager.
 -}
-data State i o s = S {
-    connections :: Map Peer (Chan (PeerMessage i o s))
+data State e o s = S {
+    connections :: Map Peer (Chan (PeerMessage e o s))
   }
 
 
 {- |
   The types of messages that the ConnectionManager understands.
 -}
-data Message i o s
+data Message e o s
   = NewPeer Peer SockAddr
-  | Send Peer (PeerMessage i o s)
+  | Send Peer (PeerMessage e o s)
 
 
 {- |

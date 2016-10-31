@@ -13,7 +13,7 @@ module Network.Legion.PartitionState (
   initProp,
   participating,
   getPowerState,
-  delta,
+  event,
   heartbeat,
   participate,
   projParticipants,
@@ -29,7 +29,7 @@ import Data.Set (Set)
 import Data.Time.Clock (UTCTime)
 import Network.Legion.Distribution (Peer)
 import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PowerState (ApplyDelta)
+import Network.Legion.PowerState (Event)
 import Network.Legion.Propagation (PropState, PropPowerState)
 import qualified Network.Legion.Propagation as P
 
@@ -43,8 +43,8 @@ import qualified Network.Legion.Propagation as P
   You can save these guys to disk in your `Network.Legion.Persistence`
   layer by using its `Binary` instance.
 -}
-newtype PartitionPowerState i o s = PartitionPowerState {
-    unPowerState :: PropPowerState PartitionKey s Peer i o
+newtype PartitionPowerState e o s = PartitionPowerState {
+    unPowerState :: PropPowerState PartitionKey s Peer e o
   } deriving (Show, Binary)
 
 
@@ -52,8 +52,8 @@ newtype PartitionPowerState i o s = PartitionPowerState {
   A reification of `PropState`, representing the propagation state of the
   partition state.
 -}
-newtype PartitionPropState i o s = PartitionPropState {
-    unPropState :: PropState PartitionKey s Peer i o
+newtype PartitionPropState e o s = PartitionPropState {
+    unPropState :: PropState PartitionKey s Peer e o
   } deriving (Eq, Show, ToJSON)
 
 
@@ -66,18 +66,18 @@ newtype PartitionPropState i o s = PartitionPropState {
 {- |
   Get the projected partition state value.
 -}
-ask :: (ApplyDelta i o s) => PartitionPropState i o s -> s
+ask :: (Event e o s) => PartitionPropState e o s -> s
 ask = P.ask . unPropState
 
 
 {- |
   Try to merge two partition states.
 -}
-mergeEither :: (Show i, Show s, ApplyDelta i o s)
+mergeEither :: (Show e, Show s, Event e o s)
   => Peer
-  -> PartitionPowerState i o s
-  -> PartitionPropState i o s
-  -> Either String (PartitionPropState i o s)
+  -> PartitionPowerState e o s
+  -> PartitionPropState e o s
+  -> Either String (PartitionPropState e o s)
 mergeEither peer ps prop =
   PartitionPropState <$>
     P.mergeEither peer (unPowerState ps) (unPropState prop)
@@ -89,8 +89,8 @@ mergeEither peer ps prop =
   state that is applicable after those actions have been taken.
 -}
 actions
-  :: PartitionPropState i o s
-  -> (Set Peer, PartitionPowerState i o s, PartitionPropState i o s)
+  :: PartitionPropState e o s
+  -> (Set Peer, PartitionPowerState e o s, PartitionPropState e o s)
 actions prop =
   let (peers, ps, newProp) = P.actions (unPropState prop)
   in (peers, PartitionPowerState ps, PartitionPropState newProp)
@@ -106,7 +106,7 @@ new :: (Default s)
     {- ^ self -}
   -> Set Peer
     {- ^ The default participation. -}
-  -> PartitionPropState i o s
+  -> PartitionPropState e o s
 new key self = PartitionPropState . P.new key self
 
 
@@ -114,10 +114,10 @@ new key self = PartitionPropState . P.new key self
   Initialize a `PartitionPropState` based on the initial underlying
   partition power state.
 -}
-initProp :: (ApplyDelta i o s)
+initProp :: (Event e o s)
   => Peer
-  -> PartitionPowerState i o s
-  -> PartitionPropState i o s
+  -> PartitionPowerState e o s
+  -> PartitionPropState e o s
 initProp self = PartitionPropState . P.initProp self . unPowerState
 
 
@@ -125,7 +125,7 @@ initProp self = PartitionPropState . P.initProp self . unPowerState
   Return `True` if the local peer is participating in the partition
   power state.
 -}
-participating :: PartitionPropState i o s -> Bool
+participating :: PartitionPropState e o s -> Bool
 participating = P.participating . unPropState
 
 
@@ -133,30 +133,30 @@ participating = P.participating . unPropState
   Get an opaque encapsulation of the partition power state, for
   transferring accros the network or whatever.
 -}
-getPowerState :: PartitionPropState i o s -> PartitionPowerState i o s
+getPowerState :: PartitionPropState e o s -> PartitionPowerState e o s
 getPowerState = PartitionPowerState . P.getPowerState . unPropState
 
 
-{- | Apply a delta to the partition state.  -}
-delta :: (ApplyDelta i o s)
-  => i
-  -> PartitionPropState i o s
-  -> PartitionPropState i o s
-delta d = PartitionPropState . P.delta d . unPropState
+{- | Apply an event to the partition state.  -}
+event :: (Event e o s)
+  => e
+  -> PartitionPropState e o s
+  -> PartitionPropState e o s
+event d = PartitionPropState . P.event d . unPropState
 
 
 {- | Move time forward for the propagation state.  -}
-heartbeat :: UTCTime -> PartitionPropState i o s -> PartitionPropState i o s
+heartbeat :: UTCTime -> PartitionPropState e o s -> PartitionPropState e o s
 heartbeat now = PartitionPropState . P.heartbeat now . unPropState
 
 
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (ApplyDelta i o s)
+participate :: (Event e o s)
   => Peer
-  -> PartitionPropState i o s
-  -> PartitionPropState i o s
+  -> PartitionPropState e o s
+  -> PartitionPropState e o s
 participate peer = PartitionPropState . P.participate peer . unPropState
 
 
@@ -164,31 +164,31 @@ participate peer = PartitionPropState . P.participate peer . unPropState
   Return the projected peers which are participating in the partition
   state.
 -}
-projParticipants :: PartitionPropState i o s -> Set Peer
+projParticipants :: PartitionPropState e o s -> Set Peer
 projParticipants = P.projParticipants . unPropState
 
 
 {- |
   Get the projected value of a `PartitionPowerState`.
 -}
-projected :: (ApplyDelta i o s) => PartitionPowerState i o s -> s
+projected :: (Event e o s) => PartitionPowerState e o s -> s
 projected = P.projected . unPowerState
 
 
 {- |
   Get the infimum value of a `PartitionPowerState`
 -}
-infimum :: PartitionPowerState i o s -> s
+infimum :: PartitionPowerState e o s -> s
 infimum = P.infimum . unPowerState
 
 
 {- |
   Figure out if this propagation state has any work to do. Return 'True' if all
   known propagation work has been completed. The implication here is that the
-  only way more work can happen is if new deltas are applied, either directly
+  only way more work can happen is if new events are applied, either directly
   or via a merge.
 -}
-idle :: PartitionPropState i o s -> Bool
+idle :: PartitionPropState e o s -> Bool
 idle = P.idle . unPropState
 
 

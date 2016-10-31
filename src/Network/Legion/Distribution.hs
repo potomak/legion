@@ -163,9 +163,7 @@ rebalanceAction self allPeers (D dist) =
 
 
 
-{- |
-  The actions that are taken in order to build a balanced cluster.
--}
+{- | The actions that are taken in order to build a balanced cluster. -}
 data RebalanceAction
   = Invite KeySet
   deriving (Show, Generic)

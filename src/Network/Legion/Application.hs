@@ -14,20 +14,20 @@ import Data.Default.Class (Default)
 import Network.Legion.Index (Indexable)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState)
-import Network.Legion.PowerState (ApplyDelta)
+import Network.Legion.PowerState (Event)
 
 {- |
   This is a more convenient way to write the somewhat unwieldy set of
   constraints
 
   > (
-  >   ApplyDelta i o s, Default s, Binary i, Binary o, Binary s, Show i,
-  >   Show o, Show s, Eq i
+  >   Event e o s, Default s, Binary e, Binary o, Binary s, Show e,
+  >   Show o, Show s, Eq e
   > )
 -}
-type LegionConstraints i o s = (
-    ApplyDelta i o s, Indexable s, Default s, Binary i, Binary o, Binary s,
-    Show i, Show o, Show s, Eq i
+type LegionConstraints e o s = (
+    Event e o s, Indexable s, Default s, Binary e, Binary o, Binary s,
+    Show e, Show o, Show s, Eq e
   )
 
 
@@ -36,10 +36,10 @@ type LegionConstraints i o s = (
   partition states. See 'Network.Legion.newMemoryPersistence' or
   'Network.Legion.diskPersistence' if you need to get started quickly.
 -}
-data Persistence i o s = Persistence {
-     getState :: PartitionKey -> IO (Maybe (PartitionPowerState i o s)),
-    saveState :: PartitionKey -> Maybe (PartitionPowerState i o s) -> IO (),
-         list :: Source IO (PartitionKey, PartitionPowerState i o s)
+data Persistence e o s = Persistence {
+     getState :: PartitionKey -> IO (Maybe (PartitionPowerState e o s)),
+    saveState :: PartitionKey -> Maybe (PartitionPowerState e o s) -> IO (),
+         list :: Source IO (PartitionKey, PartitionPowerState e o s)
       {- ^
         List all the keys known to the persistence layer. It is important
         that the implementation do the right thing with regard to

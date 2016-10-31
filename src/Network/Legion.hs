@@ -47,7 +47,7 @@ module Network.Legion (
   Indexable(..),
   LegionConstraints,
   Persistence(..),
-  ApplyDelta(..),
+  Event(..),
   Tag(..),
 
   -- * Other Types
@@ -71,7 +71,7 @@ import Network.Legion.Index (Tag(Tag, unTag), IndexRecord(IndexRecord,
   Indexable(indexEntries))
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
 import Network.Legion.PartitionState (PartitionPowerState)
-import Network.Legion.PowerState (ApplyDelta(apply))
+import Network.Legion.PowerState (Event(apply))
 import Network.Legion.Runtime (StartupMode(NewCluster, JoinCluster),
   forkLegionary, Runtime, makeRequest, search)
 import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
@@ -115,14 +115,14 @@ import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
 -- The only thing required to implement a legion service is to implement
 -- a few typeclasses and call 'forkLegionary'. The state-aware part of
 -- your application will live mostly within the request handler, which
--- is implemented via a typeclass `ApplyDelta`.
+-- is implemented via a typeclass `Event`.
 -- 
--- > class ApplyDelta i o s | i s -> o where
--- >   apply :: i -> s -> (o, s)
+-- > class Event e o s | e -> s o where
+-- >   apply :: e -> s -> (o, s)
 -- 
 -- If you look at 'apply', you will see that it is abstract over the type
--- variables @i@, @o@, and @s@.  These are the types your application
--- has to fill in. @i@ stands for "input", which is the type of requests
+-- variables @e@, @o@, and @s@.  These are the types your application
+-- has to fill in. @e@ stands for "event", which is the type of requests
 -- your application accepts; @o@ stands for "output", which is the type of
 -- responses your application will generate in response to those requests,
 -- and @s@ stands for "state", which is the application state that each
@@ -131,8 +131,8 @@ import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
 -- Implementing a request handler is pretty straight forward, but
 -- there is a little bit more to it than meets the eye. If you look at
 -- 'forkLegionary', you will see a constraint named @'LegionConstraints'
--- i o s@, which is short-hand for a long list of typeclasses that your
--- @i@, @o@, and @s@ types are going to have to implement.
+-- e o s@, which is short-hand for a long list of typeclasses that your
+-- @e@, @o@, and @s@ types are going to have to implement.
 --
 -- The persistence layer provides the framework with a way to store the
 -- various partition states. This allows you to choose any number of

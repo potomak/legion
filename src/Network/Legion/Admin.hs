@@ -44,10 +44,10 @@ import qualified Data.Text as T
 {- |
   Start the admin service in a background thread.
 -}
-runAdmin :: (LegionConstraints i o s)
+runAdmin :: (LegionConstraints e o s)
   => Port
   -> HostPreference
-  -> LIO (Source LIO (AdminMessage i o s))
+  -> LIO (Source LIO (AdminMessage e o s))
 runAdmin addr host = do
     logging <- askLoggerIO
     chan <- lift newChan
@@ -81,8 +81,8 @@ runAdmin addr host = do
     return (chanToSource chan)
   where
     send
-      :: Chan (AdminMessage i o s)
-      -> ((a -> LIO ()) -> AdminMessage i o s)
+      :: Chan (AdminMessage e o s)
+      -> ((a -> LIO ()) -> AdminMessage e o s)
       -> ActionT Text LIO a
     send chan msg = lift . lift $ do
       mvar <- newEmptyMVar
@@ -127,12 +127,12 @@ setServer = addServerHeader . stripServerHeader
 {- |
   The type of messages sent by the admin service.
 -}
-data AdminMessage i o s
-  = GetState (NodeState i o s -> LIO ())
-  | GetPart PartitionKey (Maybe (PartitionPowerState i o s) -> LIO ())
+data AdminMessage e o s
+  = GetState (NodeState e o s -> LIO ())
+  | GetPart PartitionKey (Maybe (PartitionPowerState e o s) -> LIO ())
   | Eject Peer (() -> LIO ())
 
-instance Show (AdminMessage i o s) where
+instance Show (AdminMessage e o s) where
   show (GetState _) = "(GetState _)"
   show (GetPart k _) = "(GetPart " ++ show k ++ " _)"
   show (Eject p _) = "(Eject " ++ show p ++ " _)"
