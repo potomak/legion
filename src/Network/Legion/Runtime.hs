@@ -82,13 +82,13 @@ import qualified Network.Legion.StateMachine as SM
   request source, and to handle the responses. Unless you know exactly
   what you are doing, you probably want to use `forkLegionary` instead.
 -}
-runLegionary :: (LegionConstraints i o s)
-  => Persistence i o s
+runLegionary :: (LegionConstraints e o s)
+  => Persistence e o s
     {- ^ The persistence layer used to back the legion framework. -}
   -> RuntimeSettings
     {- ^ Settings and configuration of the legionframework.  -}
   -> StartupMode
-  -> Source IO (RequestMsg i o)
+  -> Source IO (RequestMsg e o)
     {- ^ A source of requests, together with a way to respond to the requets. -}
   -> LoggingT IO ()
     {-
@@ -128,11 +128,11 @@ runLegionary
       :: Either
           (JoinRequest, JoinResponse -> LIO ())
           (Either
-            (PeerMessage i o s)
+            (PeerMessage e o s)
             (Either
-              (RequestMsg i o)
-              (AdminMessage i o s)))
-      -> RuntimeMessage i o s
+              (RequestMsg e o)
+              (AdminMessage e o s)))
+      -> RuntimeMessage e o s
     toMessage (Left m) = J m
     toMessage (Right (Left m)) = P m
     toMessage (Right (Right (Left m))) = R m
@@ -142,7 +142,7 @@ runLegionary
       Turn an LIO-based conduit into an IO-based conduit, so that it
       will work with `merge`.
     -}
-    loggingC :: ConduitM i o LIO r -> LIO (ConduitM i o IO r)
+    loggingC :: ConduitM e o LIO r -> LIO (ConduitM e o IO r)
     loggingC c = do
       logging <- askLoggerIO
       return (transPipe (`runLoggingT` logging) c)
@@ -154,18 +154,18 @@ runLegionary
   which the request is directed, and a way for the framework to deliver the
   response to some interested party.
 -}
-data RequestMsg i o
-  = Request PartitionKey i (o -> IO ())
+data RequestMsg e o
+  = Request PartitionKey e (o -> IO ())
   | SearchDispatch SearchTag (Maybe IndexRecord -> IO ())
-instance (Show i) => Show (RequestMsg i o) where
-  show (Request k i _) = "(Request " ++ show k ++ " " ++ show i ++ " _)"
+instance (Show e) => Show (RequestMsg e o) where
+  show (Request k e _) = "(Request " ++ show k ++ " " ++ show e ++ " _)"
   show (SearchDispatch s _) = "(SearchDispatch " ++ show s ++ " _)"
 
 
-messageSink :: (LegionConstraints i o s)
-  => Persistence i o s
-  -> (RuntimeState i o s, NodeState i o s)
-  -> Sink (RuntimeMessage i o s) LIO ()
+messageSink :: (LegionConstraints e o s)
+  => Persistence e o s
+  -> (RuntimeState e o s, NodeState e o s)
+  -> Sink (RuntimeMessage e o s) LIO ()
 messageSink persistence states =
     await >>= \case
       Nothing -> return ()
@@ -184,9 +184,9 @@ messageSink persistence states =
   joined the cluster.
 -}
 updatePeers
-  :: Persistence i o s
-  -> (RuntimeState i o s, NodeState i o s)
-  -> LIO (RuntimeState i o s, NodeState i o s)
+  :: Persistence e o s
+  -> (RuntimeState e o s, NodeState e o s)
+  -> LIO (RuntimeState e o s, NodeState e o s)
 updatePeers persistence (rts, ns) = do
   (peers, ns2) <- runSM persistence ns SM.getPeers
   newPeers (cm rts) peers
@@ -197,10 +197,10 @@ updatePeers persistence (rts, ns) = do
   Perform any cluster management actions, and update the state
   appropriately.
 -}
-clusterHousekeeping :: (LegionConstraints i o s)
-  => Persistence i o s
-  -> (RuntimeState i o s, NodeState i o s)
-  -> LIO (RuntimeState i o s, NodeState i o s)
+clusterHousekeeping :: (LegionConstraints e o s)
+  => Persistence e o s
+  -> (RuntimeState e o s, NodeState e o s)
+  -> LIO (RuntimeState e o s, NodeState e o s)
 clusterHousekeeping persistence (rts, ns) = do
     (actions, ns2) <- runSM persistence ns (
         heartbeat
@@ -217,9 +217,9 @@ clusterHousekeeping persistence (rts, ns) = do
   machine.
 -}
 clusterAction
-  :: ClusterAction i o s
-  -> RuntimeState i o s
-  -> LIO (RuntimeState i o s)
+  :: ClusterAction e o s
+  -> RuntimeState e o s
+  -> LIO (RuntimeState e o s)
 
 clusterAction
     (SM.ClusterMerge peer ps)
@@ -241,11 +241,11 @@ clusterAction
   state and an initial node state, and producing an updated runtime
   state and node state.
 -}
-handleMessage :: (LegionConstraints i o s)
-  => Persistence i o s
-  -> RuntimeMessage i o s
-  -> (RuntimeState i o s, NodeState i o s)
-  -> LIO (RuntimeState i o s, NodeState i o s)
+handleMessage :: (LegionConstraints e o s)
+  => Persistence e o s
+  -> RuntimeMessage e o s
+  -> (RuntimeState e o s, NodeState e o s)
+  -> LIO (RuntimeState e o s, NodeState e o s)
 
 handleMessage {- Partition Merge -}
     persistence
@@ -355,7 +355,7 @@ handleMessage {- Search Dispatch -}
             ns
           )
   where
-    sendOne :: Peer -> RuntimeState i o s -> LIO (RuntimeState i o s)
+    sendOne :: Peer -> RuntimeState e o s -> LIO (RuntimeState e o s)
     sendOne peer r@RuntimeState {nextId} = do
       send cm peer (PeerMessage self nextId (Search searchTag))
       return r {nextId = nextMessageId nextId}
@@ -509,9 +509,9 @@ data StartupMode
   is why this is an @LIO (Source LIO PeerMessage)@ instead of a
   @Source LIO PeerMessage@.
 -}
-startPeerListener :: (LegionConstraints i o s)
+startPeerListener :: (LegionConstraints e o s)
   => RuntimeSettings
-  -> LIO (Source LIO (PeerMessage i o s))
+  -> LIO (Source LIO (PeerMessage e o s))
 
 startPeerListener RuntimeSettings {peerBindAddr} =
     catchAll (do
@@ -531,9 +531,9 @@ startPeerListener RuntimeSettings {peerBindAddr} =
         throwM err
       )
   where
-    acceptLoop :: (LegionConstraints i o s)
+    acceptLoop :: (LegionConstraints e o s)
       => Socket
-      -> Chan (PeerMessage i o s)
+      -> Chan (PeerMessage e o s)
       -> LIO ()
     acceptLoop so inputChan =
         catchAll (
@@ -575,7 +575,7 @@ startPeerListener RuntimeSettings {peerBindAddr} =
 makeNodeState
   :: RuntimeSettings
   -> StartupMode
-  -> LIO (Peer, NodeState i o s, Map Peer BSockAddr)
+  -> LIO (Peer, NodeState e o s, Map Peer BSockAddr)
 
 makeNodeState RuntimeSettings {peerBindAddr} NewCluster = do
   {- Build a brand new node state, for the first node in a cluster. -}
@@ -696,21 +696,21 @@ fam SockAddrCan {} = AF_CAN
   Forks the legion framework in a background thread, and returns a way to
   send user requests to it and retrieve the responses to those requests.
 
-  - @__i__@ is the type of request your application will handle. @__i__@ stands
-    for __"input"__.
+  - @__e__@ is the type of request your application will handle. @__e__@ stands
+    for __"event"__.
   - @__o__@ is the type of response produced by your application. @__o__@ stands
     for __"output"__
   - @__s__@ is the type of state maintained by your application. More
     precisely, it is the type of the individual partitions that make up
     your global application state. @__s__@ stands for __"state"__.
 -}
-forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
-  => Persistence i o s
+forkLegionary :: (LegionConstraints e o s, MonadLoggerIO io)
+  => Persistence e o s
     {- ^ The persistence layer used to back the legion framework. -}
   -> RuntimeSettings
     {- ^ Settings and configuration of the legion framework. -}
   -> StartupMode
-  -> io (Runtime i o)
+  -> io (Runtime e o)
 
 forkLegionary persistence settings startupMode = do
   logging <- askLoggerIO
@@ -742,12 +742,12 @@ forkLegionary persistence settings startupMode = do
 
   'Runtime' is an opaque structure. Use 'makeRequest' to access it.
 -}
-data Runtime i o = Runtime {
+data Runtime e o = Runtime {
     {- |
       Send an application request to the legion runtime, and get back
       a response.
     -}
-    rtMakeRequest :: PartitionKey -> i -> IO o,
+    rtMakeRequest :: PartitionKey -> e -> IO o,
 
     {- | Query the index to find a set of partition keys.  -}
     rtSearch :: SearchTag -> IO (Maybe IndexRecord)
@@ -755,7 +755,7 @@ data Runtime i o = Runtime {
 
 
 {- | Send a user request to the legion runtime. -}
-makeRequest :: (MonadIO io) => Runtime i o -> PartitionKey -> i -> io o
+makeRequest :: (MonadIO io) => Runtime e o -> PartitionKey -> e -> io o
 makeRequest rt key = liftIO . rtMakeRequest rt key
 
 
@@ -763,7 +763,7 @@ makeRequest rt key = liftIO . rtMakeRequest rt key
   Send a search request to the legion runtime. Returns results that are
   __strictly greater than__ the provided 'SearchTag'.
 -}
-search :: (MonadIO io) => Runtime i o -> SearchTag -> Source io IndexRecord
+search :: (MonadIO io) => Runtime e o -> SearchTag -> Source io IndexRecord
 search rt tag =
   liftIO (rtSearch rt tag) >>= \case
     Nothing -> return ()
@@ -773,12 +773,12 @@ search rt tag =
 
 
 {- | This is the type of message passed around in the runtime. -}
-data RuntimeMessage i o s
-  = P (PeerMessage i o s)
-  | R (RequestMsg i o)
+data RuntimeMessage e o s
+  = P (PeerMessage e o s)
+  | R (RequestMsg e o)
   | J (JoinRequest, JoinResponse -> LIO ())
-  | A (AdminMessage i o s)
-instance (Show i, Show o, Show s) => Show (RuntimeMessage i o s) where
+  | A (AdminMessage e o s)
+instance (Show e, Show o, Show s) => Show (RuntimeMessage e o s) where
   show (P m) = "(P " ++ show m ++ ")"
   show (R m) = "(R " ++ show m ++ ")"
   show (J (jr, _)) = "(J (" ++ show jr ++ ", _))"
@@ -807,11 +807,11 @@ instance (Show i, Show o, Show s) => Show (RuntimeMessage i o s) where
   the reader. It does help simplify the code a little bit because we don't have
   to specify some kind of UUID to differentiate otherwise identical searches.
 -}
-data RuntimeState i o s = RuntimeState {
+data RuntimeState e o s = RuntimeState {
          self :: Peer,
     forwarded :: Map MessageId (o -> LIO ()),
        nextId :: MessageId,
-           cm :: ConnectionManager i o s,
+           cm :: ConnectionManager e o s,
      searches :: Map
                   SearchTag
                   (Set Peer, Maybe IndexRecord, [Maybe IndexRecord -> LIO ()])

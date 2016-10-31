@@ -12,7 +12,7 @@ module Network.Legion.Propagation (
   mergeMaybe,
   mergeEither,
   heartbeat,
-  delta,
+  event,
   actions,
   new,
   initProp,
@@ -40,7 +40,7 @@ import Data.Maybe (fromMaybe)
 import Data.Set (member, Set)
 import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format () -- For `instance Show UTCTime`
-import Network.Legion.PowerState (PowerState, divergent, ApplyDelta,
+import Network.Legion.PowerState (PowerState, divergent, Event,
   acknowledge, projectedValue, StateId)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -97,14 +97,14 @@ newtype PropPowerState o s p d r = PropPowerState {
 {- |
   Retriev the current projected value of the underlying state.
 -}
-ask :: (ApplyDelta d r s) => PropState o s p d r -> s
+ask :: (Event d r s) => PropState o s p d r -> s
 ask = projectedValue . powerState
 
 
 {- |
   Create a new propagation state based on an existing power state.
 -}
-initProp :: (ApplyDelta d r s, Ord p)
+initProp :: (Event d r s, Ord p)
   => p
   -> PropPowerState o s p d r
   -> PropState o s p d r
@@ -155,7 +155,7 @@ new origin self participants =
   Like `merge`, but total. `mergeEither` returns a human readable reason why
   the foreign powerstate can't be merged in the event of an error.
 -}
-mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show d, ApplyDelta d r s)
+mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show d, Event d r s)
   => p
   -> PropPowerState o s p d r
   -> PropState o s p d r
@@ -191,7 +191,7 @@ mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   Like `merge`, but total. `mergeMaybe` returns `Nothing` if the foreign power
   state can't be merged.
 -}
-mergeMaybe :: (Eq o, Ord p, Show o, Show s, Show p, Show d, ApplyDelta d r s)
+mergeMaybe :: (Eq o, Ord p, Show o, Show s, Show p, Show d, Event d r s)
   => p
   -> PropPowerState o s p d r
   -> PropState o s p d r
@@ -208,7 +208,7 @@ mergeMaybe source ps prop =
   precondition is not met, `error` will be called (making this function
   non-total). Using `mergeMaybe` or `mergeEither` is recommended.
 -}
-merge :: (Eq o, Ord p, Show o, Show s, Show p, Show d, ApplyDelta d r s)
+merge :: (Eq o, Ord p, Show o, Show s, Show p, Show d, Event d r s)
   => p
   -> PropPowerState o s p d r
   -> PropState o s p d r
@@ -227,14 +227,14 @@ heartbeat newNow prop = prop {now = max (now prop) (Just newNow)}
 
 
 {- |
-  Apply a delta.
+  Apply an event.
 -}
-delta :: (Ord p, ApplyDelta d r s)
+event :: (Ord p, Event d r s)
   => d
   -> PropState o s p d r
   -> PropState o s p d r
-delta d prop@PropState {self, powerState, now} =
-  let newPowerState = PS.delta self d powerState
+event d prop@PropState {self, powerState, now} =
+  let newPowerState = PS.event self d powerState
   in prop {
       powerState = newPowerState,
       peerStates = Map.fromAscList [
@@ -292,7 +292,7 @@ gracePeriod = oneMinute
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (Ord p, ApplyDelta d r s)
+participate :: (Ord p, Event d r s)
   => p
   -> PropState o s p d r
   -> PropState o s p d r
@@ -310,7 +310,7 @@ participate peer prop@PropState {powerState, now} =
 {- |
   Eject a participant from the power state.
 -}
-disassociate :: (Ord p, ApplyDelta d r s)
+disassociate :: (Ord p, Event d r s)
   => p
   -> PropState o s p d r
   -> PropState o s p d r
@@ -326,7 +326,7 @@ disassociate peer prop@PropState {powerState, now} =
 
 
 {- |
-  Return the deltas that are unknown to the specified peer.
+  Return the events that are unknown to the specified peer.
 -}
 divergences :: (Ord p) => p -> PropState o s p d r -> Map (StateId p) d
 divergences peer = PS.divergences peer . powerState
@@ -368,7 +368,7 @@ projParticipants = PS.projParticipants . powerState
 {- |
   Get the projected value of a PropPowerState.
 -}
-projected :: (ApplyDelta d r s) => PropPowerState o s p d r -> s
+projected :: (Event d r s) => PropPowerState o s p d r -> s
 projected = PS.projectedValue . unPowerState
 
 
@@ -382,7 +382,7 @@ infimum = PS.infimumValue . unPowerState
 {- |
   Figure out if this propagation state has any work to do. Return 'True' if all
   known propagation work has been completed. The implication here is that the
-  only way more work can happen is if new deltas are applied, either directly
+  only way more work can happen is if new events are applied, either directly
   or via a merge.
 -}
 idle :: (Ord p) => PropState o s p d r -> Bool

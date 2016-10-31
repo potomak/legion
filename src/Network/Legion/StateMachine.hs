@@ -88,7 +88,7 @@ import Network.Legion.KeySet (KeySet, union)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState, PartitionPropState)
-import Network.Legion.PowerState (ApplyDelta, apply)
+import Network.Legion.PowerState (Event, apply)
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -102,20 +102,20 @@ import qualified Network.Legion.PartitionState as P
   This is the portion of the local node state that is not persistence
   related.
 -}
-data NodeState i o s = NodeState {
+data NodeState e o s = NodeState {
              self :: Peer,
           cluster :: ClusterPropState,
-       partitions :: Map PartitionKey (PartitionPropState i o s),
+       partitions :: Map PartitionKey (PartitionPropState e o s),
         migration :: KeySet,
           nsIndex :: Set IndexRecord
   }
-instance (Show i, Show s) => Show (NodeState i o s) where
+instance (Show e, Show s) => Show (NodeState e o s) where
   show = unpack . decodeUtf8 . toStrict . encode
 {-
   The ToJSON instance is mainly for debugging. The Haskell-generated 'Show'
   instance is very hard to read.
 -}
-instance (Show i, Show s) => ToJSON (NodeState i o s) where
+instance (Show e, Show s) => ToJSON (NodeState e o s) where
   toJSON (NodeState self cluster partitions migration nsIndex) =
     object [
               "self" .= show self,
@@ -129,7 +129,7 @@ instance (Show i, Show s) => ToJSON (NodeState i o s) where
 {- |
   Make a new node state.
 -}
-newNodeState :: Peer -> ClusterPropState -> NodeState i o s
+newNodeState :: Peer -> ClusterPropState -> NodeState e o s
 newNodeState self cluster =
   NodeState {
       self,
@@ -150,8 +150,8 @@ newNodeState self cluster =
   if we want to model the global state of the node as a single unit,
   we have to do so using a monad.
 -}
-newtype SM i o s a = SM {
-    unSM :: ReaderT (Persistence i o s) (StateT (NodeState i o s) LIO) a
+newtype SM e o s a = SM {
+    unSM :: ReaderT (Persistence e o s) (StateT (NodeState e o s) LIO) a
   }
   deriving (Functor, Applicative, Monad, MonadLogger, MonadIO)
 
@@ -160,18 +160,18 @@ newtype SM i o s a = SM {
   Run an SM action.
 -}
 runSM
-  :: Persistence i o s
-  -> NodeState i o s
-  -> SM i o s a
-  -> LIO (a, NodeState i o s)
+  :: Persistence e o s
+  -> NodeState e o s
+  -> SM e o s a
+  -> LIO (a, NodeState e o s)
 runSM p ns action = runStateT (runReaderT (unSM action) p) ns
 
 
 {- | Handle a user request. -}
-userRequest :: (ApplyDelta i o s, Default s, Indexable s)
+userRequest :: (Event e o s, Default s, Indexable s)
   => PartitionKey
-  -> i
-  -> SM i o s (UserResponse o)
+  -> e
+  -> SM e o s (UserResponse o)
 userRequest key request = SM $ do
   NodeState {self, cluster} <- lift get
   let owners = C.findPartition key cluster
@@ -180,7 +180,7 @@ userRequest key request = SM $ do
       partition <- unSM $ getPartition key
       let
         response = fst (apply request (P.ask partition))
-        partition2 = P.delta request partition
+        partition2 = P.event request partition
       unSM $ savePartition key partition2
       return (Respond response)
 
@@ -196,11 +196,11 @@ userRequest key request = SM $ do
   Handle the state transition for a partition merge event. Returns 'Left'
   if there is an error, and 'Right' if everything went fine.
 -}
-partitionMerge :: (Show i, Show s, ApplyDelta i o s, Default s, Indexable s)
+partitionMerge :: (Show e, Show s, Event e o s, Default s, Indexable s)
   => Peer
   -> PartitionKey
-  -> PartitionPowerState i o s
-  -> SM i o s ()
+  -> PartitionPowerState e o s
+  -> SM e o s ()
 partitionMerge source key foreignPartition = do
   partition <- getPartition key
   case P.mergeEither source foreignPartition partition of
@@ -215,7 +215,7 @@ partitionMerge source key foreignPartition = do
 clusterMerge
   :: Peer
   -> ClusterPowerState
-  -> SM i o s ()
+  -> SM e o s ()
 clusterMerge source foreignCluster = SM . lift $ do
   nodeState@NodeState {migration, cluster} <- get
   case C.mergeEither source foreignCluster cluster of
@@ -242,7 +242,7 @@ clusterMerge source foreignCluster = SM . lift $ do
   peer to a partition. This will cause the data to be transfered in the
   normal course of propagation.
 -}
-migrate :: (Default s, ApplyDelta i o s, Indexable s) => SM i o s ()
+migrate :: (Default s, Event e o s, Indexable s) => SM e o s ()
 migrate = do
     NodeState {migration} <- (SM . lift) get
     persistence <- SM ask
@@ -252,8 +252,8 @@ migrate = do
       $$ accum
     (SM . lift) $ modify (\ns -> ns {migration = KS.empty})
   where
-    accum :: (Default s, ApplyDelta i o s, Indexable s)
-      => Sink (PartitionKey, PartitionPowerState i o s) (SM i o s) ()
+    accum :: (Default s, Event e o s, Indexable s)
+      => Sink (PartitionKey, PartitionPowerState e o s) (SM e o s) ()
     accum = awaitForever $ \ (key, ps) -> do
       NodeState {self, cluster, partitions} <- (lift . SM . lift) get
       let
@@ -268,7 +268,7 @@ migrate = do
   Handle all cluster and partition state propagation actions, and return
   an updated node state.
 -}
-propagate :: SM i o s [ClusterAction i o s]
+propagate :: SM e o s [ClusterAction e o s]
 propagate = SM $ do
     partitionActions <- getPartitionActions
     clusterActions <- unSM getClusterActions
@@ -296,7 +296,7 @@ propagate = SM $ do
         }
       return actions
 
-    getClusterActions :: SM i o s [ClusterAction i o s]
+    getClusterActions :: SM e o s [ClusterAction e o s]
     getClusterActions = SM $ do
       ns@NodeState {cluster} <- lift get
       let
@@ -312,7 +312,7 @@ propagate = SM $ do
   Figure out if any rebalancing actions must be taken by this node, and kick
   them off if so.
 -}
-rebalance :: SM i o s ()
+rebalance :: SM e o s ()
 rebalance = SM $ do
   ns@NodeState {self, cluster} <- lift get
   let
@@ -334,7 +334,7 @@ rebalance = SM $ do
 
 
 {- | Update all of the propagation states with the current time.  -}
-heartbeat :: SM i o s ()
+heartbeat :: SM e o s ()
 heartbeat = SM $ do
   now <- lift3 getCurrentTime
   ns@NodeState {cluster, partitions} <- lift get
@@ -348,14 +348,14 @@ heartbeat = SM $ do
 
 
 {- | Eject a peer from the cluster.  -}
-eject :: Peer -> SM i o s ()
+eject :: Peer -> SM e o s ()
 eject peer = SM . lift $ do
   ns@NodeState {cluster} <- get
   put ns {cluster = C.eject peer cluster}
 
 
 {- | Handle a peer join request.  -}
-join :: BSockAddr -> SM i o s (Peer, ClusterPowerState)
+join :: BSockAddr -> SM e o s (Peer, ClusterPowerState)
 join peerAddr = SM $ do
   peer <- lift2 newPeer
   ns@NodeState {cluster} <- lift get
@@ -387,7 +387,7 @@ join peerAddr = SM $ do
 
   TODO: implement fastest competitive search.
 -}
-minimumCompleteServiceSet :: SM i o s (Set Peer)
+minimumCompleteServiceSet :: SM e o s (Set Peer)
 minimumCompleteServiceSet = SM $ do
   NodeState {cluster} <- lift get
   return (D.minimumCompleteServiceSet (C.getDistribution cluster))
@@ -397,7 +397,7 @@ minimumCompleteServiceSet = SM $ do
   Search the index, and return the first record that is __strictly
   greater than__ the provided search tag, if such a record exists.
 -}
-search :: SearchTag -> SM i o s (Maybe IndexRecord)
+search :: SearchTag -> SM e o s (Maybe IndexRecord)
 search SearchTag {stTag, stKey = Nothing} = SM $ do
   NodeState {nsIndex} <- lift get
   return (Set.lookupGE IndexRecord {irTag = stTag, irKey = minBound} nsIndex)
@@ -411,9 +411,9 @@ search SearchTag {stTag, stKey = Just key} = SM $ do
   with other nodes. It is up to the runtime system to implement the
   actions.
 -}
-data ClusterAction i o s
+data ClusterAction e o s
   = ClusterMerge Peer ClusterPowerState
-  | PartitionMerge Peer PartitionKey (PartitionPowerState i o s)
+  | PartitionMerge Peer PartitionKey (PartitionPowerState e o s)
 
 
 {- |
@@ -426,14 +426,14 @@ data UserResponse o
 
 
 {- | Get the known peer data from the cluster. -}
-getPeers :: SM i o s (Map Peer BSockAddr)
+getPeers :: SM e o s (Map Peer BSockAddr)
 getPeers = SM $ C.getPeers . cluster <$> lift get
 
 
 {- | Gets a partition state. -}
-getPartition :: (Default s, ApplyDelta i o s)
+getPartition :: (Default s, Event e o s)
   => PartitionKey
-  -> SM i o s (PartitionPropState i o s)
+  -> SM e o s (PartitionPropState e o s)
 getPartition key = SM $ do
   persistence <- ask
   NodeState {self, partitions, cluster} <- lift get
@@ -449,10 +449,10 @@ getPartition key = SM $ do
   Saves a partition state. This function automatically handles the cache
   for active propagations, as well as reindexing of partitions.
 -}
-savePartition :: (Default s, ApplyDelta i o s, Indexable s)
+savePartition :: (Default s, Event e o s, Indexable s)
   => PartitionKey
-  -> PartitionPropState i o s
-  -> SM i o s ()
+  -> PartitionPropState e o s
+  -> SM e o s ()
 savePartition key partition = SM $ do
   persistence <- ask
   oldTags <- indexEntries . P.ask <$> unSM (getPartition key)

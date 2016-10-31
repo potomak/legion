@@ -37,7 +37,7 @@ import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.Distribution (ParticipationDefaults, modify, Peer)
 import Network.Legion.KeySet (KeySet, full, unions)
 import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PowerState (ApplyDelta(apply))
+import Network.Legion.PowerState (Event(apply))
 import Network.Legion.Propagation (PropState, PropPowerState)
 import Network.Socket (SockAddr)
 import qualified Data.Map as Map
@@ -97,7 +97,7 @@ data Update
   | PeerEjected Peer
   deriving (Show, Generic)
 instance Binary Update
-instance ApplyDelta Update () ClusterState where
+instance Event Update () ClusterState where
   apply (PeerJoined peer addr) cs@ClusterState {peers} =
     ((), cs {peers = Map.insert peer addr peers})
   apply (Participating peer ks) cs@ClusterState {distribution} =
@@ -119,7 +119,7 @@ claimParticipation
   -> ClusterPropState
 claimParticipation peer ks =
   ClusterPropState
-  . P.delta (Participating peer ks)
+  . P.event (Participating peer ks)
   . unPropState
 
 
@@ -130,7 +130,7 @@ new :: UUID -> Peer -> SockAddr -> ClusterPropState
 new clusterId self addy =
   claimParticipation self full
   . ClusterPropState
-  . P.delta (PeerJoined self (BSockAddr addy))
+  . P.event (PeerJoined self (BSockAddr addy))
   $ P.new clusterId self (Set.singleton self)
 
 
@@ -185,7 +185,7 @@ joinCluster
   -> ClusterPropState
 joinCluster peer addy =
   ClusterPropState
-  . P.delta (PeerJoined peer addy)
+  . P.event (PeerJoined peer addy)
   . P.participate peer
   . unPropState
 
@@ -196,7 +196,7 @@ joinCluster peer addy =
 eject :: Peer -> ClusterPropState -> ClusterPropState
 eject peer =
   ClusterPropState
-  . P.delta (PeerEjected peer)
+  . P.event (PeerEjected peer)
   . P.disassociate peer
   . unPropState
 

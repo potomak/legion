@@ -7,7 +7,7 @@
 module Network.Legion.PowerState (
   PowerState,
   Infimum(..),
-  ApplyDelta(..),
+  Event(..),
   StateId,
   new,
   merge,
@@ -23,7 +23,7 @@ module Network.Legion.PowerState (
   projParticipants,
   divergent,
   divergences,
-  delta,
+  event,
 ) where
 
 import Prelude hiding (null)
@@ -47,19 +47,19 @@ import qualified Data.Set as Set
   state" is chosen to indicate that values of this type represent multiple
   possible values of the underlying user state @s@.
 -}
-data PowerState o s p d r = PowerState {
+data PowerState o s p e r = PowerState {
      origin :: o,
     infimum :: Infimum s p,
-     deltas :: Map (StateId p) (Delta p d, Set p)
+     events :: Map (StateId p) (Delta p e, Set p)
   } deriving (Generic, Show, Eq)
-instance (Binary o, Binary s, Binary p, Binary d) => Binary (PowerState o s p d r)
-instance (Show o, Show s, Show p, Show d) => ToJSON (PowerState o s p d r) where
-  toJSON PowerState {origin, infimum, deltas} = object [
+instance (Binary o, Binary s, Binary p, Binary e) => Binary (PowerState o s p e r)
+instance (Show o, Show s, Show p, Show e) => ToJSON (PowerState o s p e r) where
+  toJSON PowerState {origin, infimum, events} = object [
       "origin" .= show origin,
       "infimum" .= infimum,
-      "deltas" .= Map.fromList [
-          (show sid, (show d, Set.map show ps))
-          | (sid, (d, ps)) <- Map.toList deltas
+      "events" .= Map.fromList [
+          (show sid, (show e, Set.map show ps))
+          | (sid, (e, ps)) <- Map.toList events
         ]
     ]
 
@@ -115,28 +115,28 @@ instance Default (StateId p) where
 {- |
   `Delta` is how we represent mutations to the power state.
 -}
-data Delta p d
+data Delta p e
   = Join p
   | UnJoin p
-  | Delta d
+  | Event e
   deriving (Generic, Show, Eq)
-instance (Binary p, Binary d) => Binary (Delta p d)
+instance (Binary p, Binary e) => Binary (Delta p e)
 
 
 {- |
-  The class which allows for delta application.
+  The class which allows for event application.
 -}
-class ApplyDelta i o s | i -> s o where
+class Event e o s | e -> s o where
   {- |
-    Apply a delta to a state value. *This function MUST be total!!!*
+    Apply an event to a state value. *This function MUST be total!!!*
   -}
-  apply :: i -> s -> (o, s)
+  apply :: e -> s -> (o, s)
 
 
 {- |
   Construct a new PowerState with the given origin and initial participants
 -}
-new :: (Default s) => o -> Set p -> PowerState o s p d r
+new :: (Default s) => o -> Set p -> PowerState o s p e r
 new origin participants =
   PowerState {
       origin,
@@ -145,7 +145,7 @@ new origin participants =
           participants,
           stateValue = def
         },
-      deltas = Map.empty
+      events = Map.empty
     }
 
 
@@ -155,10 +155,10 @@ new origin participants =
   a lower one. This function is not total. Only `PowerState`s that originated
   from the same `new` call can be merged.
 -}
-merge :: (Eq o, ApplyDelta d r s, Ord p, Show o, Show s, Show p, Show d)
-  => PowerState o s p d r
-  -> PowerState o s p d r
-  -> PowerState o s p d r
+merge :: (Eq o, Event e r s, Ord p, Show o, Show s, Show p, Show e)
+  => PowerState o s p e r
+  -> PowerState o s p e r
+  -> PowerState o s p e r
 merge a b = either error id (mergeEither a b)
 
 
@@ -166,10 +166,10 @@ merge a b = either error id (mergeEither a b)
   Like `merge`, but safe. Returns `Nothing` if the two power states do
   not share the same origin.
 -}
-mergeMaybe :: (Eq o, ApplyDelta d r s, Ord p, Show o, Show s, Show p, Show d)
-  => PowerState o s p d r
-  -> PowerState o s p d r
-  -> Maybe (PowerState o s p d r)
+mergeMaybe :: (Eq o, Event e r s, Ord p, Show o, Show s, Show p, Show e)
+  => PowerState o s p e r
+  -> PowerState o s p e r
+  -> Maybe (PowerState o s p e r)
 mergeMaybe a b = either (const Nothing) Just (mergeEither a b)
 
 
@@ -177,27 +177,27 @@ mergeMaybe a b = either (const Nothing) Just (mergeEither a b)
   Like `mergeMaybe`, but returns a human-decipherable error message of
   exactly what went wrong.
 -}
-mergeEither :: (Eq o, ApplyDelta d r s, Ord p, Show o, Show s, Show p, Show d)
-  => PowerState o s p d r
-  -> PowerState o s p d r
-  -> Either String (PowerState o s p d r)
+mergeEither :: (Eq o, Event e r s, Ord p, Show o, Show s, Show p, Show e)
+  => PowerState o s p e r
+  -> PowerState o s p e r
+  -> Either String (PowerState o s p e r)
 mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     Right . reduce . removeRenegade $ PowerState {
         origin = o1,
         infimum,
-        deltas = removeObsolete (unionWith mergeAcks d1 d2)
+        events = removeObsolete (unionWith mergeAcks d1 d2)
       }
   where
     infimum = max i1 i2
 
     {- |
-      Obsolete deltas are deltas that are already included in the latest
+      Obsolete events are events that are already included in the latest
       infimum.
     -}
     removeObsolete = filterWithKey (\k _ -> k > stateId infimum)
 
     {- |
-      Renegade deltas are deltas that originate from a non-participating
+      Renegade events are events that originate from a non-participating
       peer.  This might happen in a network partition situation, where
       the cluster ejected a peer that later reappears on the network,
       broadcasting updates.
@@ -211,11 +211,11 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     -}
     removeRenegade ps =
         ps {
-            deltas =
+            events =
               fromAscList
               . filter nonRenegade
               . toAscList
-              . deltas
+              . events
               $ ps
           }
       where
@@ -223,7 +223,7 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
         nonRenegade (Sid _ p, _) = p `member` peers
         peers = allParticipants ps
 
-    mergeAcks (d, s1) (_, s2) = (d, s1 `union` s2)
+    mergeAcks (e, s1) (_, s2) = (e, s1 `union` s2)
 
 mergeEither a b = Left
   $ "PowerStates " ++ show a ++ " and " ++ show b ++ " do not share the "
@@ -235,25 +235,25 @@ mergeEither a b = Left
   contained in the powerset. The implication is that the participant
   __must__ base all future operations on the result of this function.
 -}
-acknowledge :: (ApplyDelta d r s, Ord p)
+acknowledge :: (Event e r s, Ord p)
   => p
-  -> PowerState o s p d r
-  -> PowerState o s p d r
-acknowledge p ps@PowerState {deltas} =
-    reduce ps {deltas = fmap ackOne deltas}
+  -> PowerState o s p e r
+  -> PowerState o s p e r
+acknowledge p ps@PowerState {events} =
+    reduce ps {events = fmap ackOne events}
   where
-    ackOne (d, acks) = (d, Set.insert p acks)
+    ackOne (e, acks) = (e, Set.insert p acks)
 
 
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (ApplyDelta d r s, Ord p)
+participate :: (Event e r s, Ord p)
   => p
-  -> PowerState o s p d r
-  -> PowerState o s p d r
-participate p ps@PowerState {deltas} = acknowledge p $ ps {
-    deltas = Map.insert (nextId p ps) (Join p, Set.empty) deltas
+  -> PowerState o s p e r
+  -> PowerState o s p e r
+participate p ps@PowerState {events} = acknowledge p $ ps {
+    events = Map.insert (nextId p ps) (Join p, Set.empty) events
   }
 
 
@@ -261,51 +261,51 @@ participate p ps@PowerState {deltas} = acknowledge p $ ps {
   Indicate that a participant is removing itself from participating in
   the distributed power state.
 -}
-disassociate :: (ApplyDelta d r s, Ord p)
+disassociate :: (Event e r s, Ord p)
   => p
-  -> PowerState o s p d r
-  -> PowerState o s p d r
-disassociate p ps@PowerState {deltas} = acknowledge p $ ps {
-    deltas = Map.insert (nextId p ps) (UnJoin p, Set.empty) deltas
+  -> PowerState o s p e r
+  -> PowerState o s p e r
+disassociate p ps@PowerState {events} = acknowledge p $ ps {
+    events = Map.insert (nextId p ps) (UnJoin p, Set.empty) events
   }
 
 
 {- |
   Introduce a change to the PowerState on behalf of the participant.
 -}
-delta :: (ApplyDelta d r s, Ord p)
+event :: (Event e r s, Ord p)
   => p
-  -> d
-  -> PowerState o s p d r
-  -> PowerState o s p d r
-delta p d ps@PowerState {deltas} = acknowledge p $ ps {
-    deltas = Map.insert (nextId p ps) (Delta d, Set.empty) deltas
+  -> e
+  -> PowerState o s p e r
+  -> PowerState o s p e r
+event p e ps@PowerState {events} = acknowledge p $ ps {
+    events = Map.insert (nextId p ps) (Event e, Set.empty) events
   }
 
 
 {- |
   Return the current projected value of the power state.
 -}
-projectedValue :: (ApplyDelta d r s) => PowerState o s p d r -> s
-projectedValue PowerState {infimum = Infimum {stateValue}, deltas} =
-    foldr (\ i s -> snd (apply i s)) stateValue changes
+projectedValue :: (Event e r s) => PowerState o s p e r -> s
+projectedValue PowerState {infimum = Infimum {stateValue}, events} =
+    foldr (\ e s -> snd (apply e s)) stateValue changes
   where
-    changes = foldr getDeltas [] (toDescList deltas)
-    getDeltas (_, (Delta d, _)) acc = d:acc
+    changes = foldr getDeltas [] (toDescList events)
+    getDeltas (_, (Event e, _)) acc = e:acc
     getDeltas _ acc = acc
 
 
 {- |
   Return the current infimum value of the power state.
 -}
-infimumValue :: PowerState o s p d r -> s
+infimumValue :: PowerState o s p e r -> s
 infimumValue PowerState {infimum = Infimum {stateValue}} = stateValue
 
 
 {- |
   Gets the known participants at the infimum.
 -}
-infimumParticipants :: PowerState o s p d r -> Set p
+infimumParticipants :: PowerState o s p e r -> Set p
 infimumParticipants PowerState {infimum = Infimum {participants}} = participants
 
 
@@ -313,12 +313,12 @@ infimumParticipants PowerState {infimum = Infimum {participants}} = participants
   Get all known participants. This includes participants that are
   projected for removal.
 -}
-allParticipants :: (Ord p) => PowerState o s p d r -> Set p
+allParticipants :: (Ord p) => PowerState o s p e r -> Set p
 allParticipants PowerState {
     infimum = Infimum {participants},
-    deltas
+    events
   } =
-    foldr updateParticipants participants (toDescList deltas)
+    foldr updateParticipants participants (toDescList events)
   where
     updateParticipants (_, (Join p, _)) = Set.insert p
     updateParticipants _ = id
@@ -328,12 +328,12 @@ allParticipants PowerState {
   Get all the projected participants. This does not include participants that
   are projected for removal.
 -}
-projParticipants :: (Ord p) => PowerState o s p d r -> Set p
+projParticipants :: (Ord p) => PowerState o s p e r -> Set p
 projParticipants PowerState {
     infimum = Infimum {participants},
-    deltas
+    events
   } =
-    foldr updateParticipants participants (toDescList deltas)
+    foldr updateParticipants participants (toDescList events)
   where
     updateParticipants (_, (Join p, _)) = Set.insert p
     updateParticipants (_, (UnJoin p, _)) = Set.delete p
@@ -342,15 +342,15 @@ projParticipants PowerState {
 
 {- |
   Returns the participants that we think might be diverging. In this
-  context, a peer is "diverging" if there is a delta that the peer has
+  context, a peer is "diverging" if there is an event that the peer has
   not acknowledged.
 -}
-divergent :: (Ord p) => PowerState o s p d r -> Set p
+divergent :: (Ord p) => PowerState o s p e r -> Set p
 divergent PowerState {
     infimum = Infimum {participants},
-    deltas
+    events
   } =
-    accum participants Set.empty (toAscList deltas)
+    accum participants Set.empty (toAscList events)
   where
     {- |
       `accum` mnemonics:
@@ -375,7 +375,7 @@ divergent PowerState {
       in
         accum j2 d2 moreDeltas
 
-    accum j d ((_, (Delta _, a)):moreDeltas) =
+    accum j d ((_, (Event _, a)):moreDeltas) =
       let
         d2 = (j \\ a) `union` d
       in
@@ -383,13 +383,13 @@ divergent PowerState {
 
 
 {- |
-  Return the deltas that are unknown to the specified peer.
+  Return the events that are unknown to the specified peer.
 -}
-divergences :: (Ord p) => p -> PowerState o s p d r -> Map (StateId p) d
-divergences peer PowerState {deltas} =
+divergences :: (Ord p) => p -> PowerState o s p e r -> Map (StateId p) e
+divergences peer PowerState {events} =
   fromAscList [
-    (sid, d)
-    | (sid, (Delta d, p)) <- toAscList deltas
+    (sid, e)
+    | (sid, (Event e, p)) <- toAscList events
     , not (peer `member` p)
   ]
 
@@ -399,37 +399,37 @@ divergences peer PowerState {deltas} =
   has enough information to derive a new infimum value. In other words,
   this is where garbage collection happens.
 -}
-reduce :: (ApplyDelta d r s, Ord p) => PowerState o s p d r -> PowerState o s p d r
+reduce :: (Event e r s, Ord p) => PowerState o s p e r -> PowerState o s p e r
 reduce ps@PowerState {
     infimum = infimum@Infimum {participants, stateValue},
-    deltas
+    events
   } =
-    case minViewWithKey deltas of
+    case minViewWithKey events of
       Nothing -> ps
-      Just ((i, (update, acks)), newDeltas) ->
+      Just ((sid, (update, acks)), newDeltas) ->
         if not . null $ participants \\ acks
           then ps
           else case update of
             Join p -> reduce ps {
                 infimum = infimum {
-                    stateId = i,
+                    stateId = sid,
                     participants = Set.insert p participants
                   },
-                deltas = newDeltas
+                events = newDeltas
               }
             UnJoin p -> reduce ps {
                 infimum = infimum {
-                    stateId = i,
+                    stateId = sid,
                     participants = Set.delete p participants
                   },
-                deltas = newDeltas
+                events = newDeltas
               }
-            Delta d -> reduce ps {
+            Event e -> reduce ps {
                 infimum = infimum {
-                    stateId = i,
-                    stateValue = snd (apply d stateValue)
+                    stateId = sid,
+                    stateValue = snd (apply e stateValue)
                   },
-                deltas = newDeltas
+                events = newDeltas
               }
 
 
@@ -437,9 +437,9 @@ reduce ps@PowerState {
   A utility function that constructs the next `StateId` on behalf of
   a participant.
 -}
-nextId :: (Ord p) => p -> PowerState o s p d r -> StateId p
-nextId p PowerState {infimum = Infimum {stateId}, deltas} =
-  case maximum (stateId:keys deltas) of
+nextId :: (Ord p) => p -> PowerState o s p e r -> StateId p
+nextId p PowerState {infimum = Infimum {stateId}, events} =
+  case maximum (stateId:keys events) of
     BottomSid -> Sid 0 p
     Sid ord _ -> Sid (succ ord) p
 
