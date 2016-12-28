@@ -448,7 +448,7 @@ getPeers = SM $ C.getPeers . cluster <$> lift get
 
 
 {- | Gets a partition state. -}
-getPartition :: (Default s, Event e o s)
+getPartition :: (Default s)
   => PartitionKey
   -> SM e o s (PartitionPropState e o s)
 getPartition key = SM $ do

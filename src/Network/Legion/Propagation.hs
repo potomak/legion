@@ -41,7 +41,7 @@ import Data.Set (member, Set)
 import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format () -- For `instance Show UTCTime`
 import Network.Legion.PowerState (PowerState, divergent, Event,
-  acknowledge, projectedValue, StateId)
+  projectedValue, StateId)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Network.Legion.PowerState as PS
@@ -104,12 +104,12 @@ ask = projectedValue . powerState
 {- |
   Create a new propagation state based on an existing power state.
 -}
-initProp :: (Event e r s, Ord p)
+initProp :: (Ord p)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
 initProp self ps =
-  let powerState = acknowledge self (unPowerState ps)
+  let powerState = unPowerState ps
   in PropState {
       powerState = powerState,
       peerStates = Map.fromAscList [
@@ -162,7 +162,7 @@ mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
   -> Either String (PropState o s p e r)
 mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   let ps = unPowerState kernel
-  in case acknowledge self <$> PS.mergeEither ps powerState of
+  in case PS.mergeEither ps powerState of
     Left err -> Left err
     Right merged -> Right prop {
         powerState = merged,
@@ -229,7 +229,7 @@ heartbeat newNow prop = prop {now = max (now prop) (Just newNow)}
 {- |
   Apply an event.
 -}
-event :: (Ord p, Event e r s)
+event :: (Ord p)
   => e
   -> PropState o s p e r
   -> PropState o s p e r
@@ -292,7 +292,7 @@ gracePeriod = oneMinute
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (Ord p, Event e r s)
+participate :: (Ord p)
   => p
   -> PropState o s p e r
   -> PropState o s p e r
@@ -310,7 +310,7 @@ participate peer prop@PropState {powerState, now} =
 {- |
   Eject a participant from the power state.
 -}
-disassociate :: (Ord p, Event e r s)
+disassociate :: (Ord p)
   => p
   -> PropState o s p e r
   -> PropState o s p e r

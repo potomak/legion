@@ -257,11 +257,11 @@ acknowledge p ps@PowerState {events} =
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (Event e r s, Ord p)
+participate :: (Ord p)
   => p
   -> PowerState o s p e r
   -> PowerState o s p e r
-participate p ps@PowerState {events} = acknowledge p $ ps {
+participate p ps@PowerState {events} = ps {
     events = Map.insert (nextId p ps) (Join p, Set.empty) events
   }
 
@@ -270,11 +270,11 @@ participate p ps@PowerState {events} = acknowledge p $ ps {
   Indicate that a participant is removing itself from participating in
   the distributed power state.
 -}
-disassociate :: (Event e r s, Ord p)
+disassociate :: (Ord p)
   => p
   -> PowerState o s p e r
   -> PowerState o s p e r
-disassociate p ps@PowerState {events} = acknowledge p $ ps {
+disassociate p ps@PowerState {events} = ps {
     events = Map.insert (nextId p ps) (UnJoin p, Set.empty) events
   }
 
@@ -282,12 +282,12 @@ disassociate p ps@PowerState {events} = acknowledge p $ ps {
 {- |
   Introduce a change to the PowerState on behalf of the participant.
 -}
-event :: (Event e r s, Ord p)
+event :: (Ord p)
   => p
   -> e
   -> PowerState o s p e r
   -> PowerState o s p e r
-event p e ps@PowerState {events} = acknowledge p $ ps {
+event p e ps@PowerState {events} = ps {
     events = Map.insert (nextId p ps) (Event e, Set.empty) events
   }
 

@@ -116,8 +116,8 @@ new key self = PartitionPropState . P.new key self
   Initialize a `PartitionPropState` based on the initial underlying
   partition power state.
 -}
-initProp :: (Event e o s)
-  => Peer
+initProp
+  :: Peer
   -> PartitionPowerState e o s
   -> PartitionPropState e o s
 initProp self = PartitionPropState . P.initProp self . unPowerState
@@ -140,8 +140,8 @@ getPowerState = PartitionPowerState . P.getPowerState . unPropState
 
 
 {- | Apply an event to the partition state.  -}
-event :: (Event e o s)
-  => e
+event
+  :: e
   -> PartitionPropState e o s
   -> PartitionPropState e o s
 event d = PartitionPropState . P.event d . unPropState
@@ -155,8 +155,8 @@ heartbeat now = PartitionPropState . P.heartbeat now . unPropState
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (Event e o s)
-  => Peer
+participate
+  :: Peer
   -> PartitionPropState e o s
   -> PartitionPropState e o s
 participate peer = PartitionPropState . P.participate peer . unPropState
