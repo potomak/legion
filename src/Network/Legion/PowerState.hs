@@ -12,7 +12,6 @@
 -}
 module Network.Legion.PowerState (
   PowerState,
-  Infimum(..),
   Event(..),
   StateId,
 
