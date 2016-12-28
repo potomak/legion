@@ -37,7 +37,7 @@ import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.Distribution (ParticipationDefaults, modify, Peer)
 import Network.Legion.KeySet (KeySet, full, unions)
 import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PowerState (Event, apply, DifferentOrigins)
+import Network.Legion.PowerState (Event, apply, StateId, DifferentOrigins)
 import Network.Legion.Propagation (PropState, PropPowerState)
 import Network.Socket (SockAddr)
 import qualified Data.Map as Map
@@ -210,7 +210,7 @@ mergeEither
   -> ClusterPropState
   -> Either
       (DifferentOrigins UUID)
-      (ClusterPropState, KeySet)
+      ((ClusterPropState, Map (StateId Peer) ()), KeySet)
 mergeEither otherPeer (ClusterPowerState otherPS) (ClusterPropState prop) =
   let
     self = P.getSelf prop
@@ -221,8 +221,8 @@ mergeEither otherPeer (ClusterPowerState otherPS) (ClusterPropState prop) =
       ]
   in case P.mergeEither otherPeer otherPS prop of
     Left err -> Left err
-    Right newProp ->
-      Right (ClusterPropState newProp, migrating)
+    Right (merged, outputs) ->
+      Right ((ClusterPropState merged, outputs), migrating)
 
 
 {- |

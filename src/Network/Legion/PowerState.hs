@@ -178,7 +178,7 @@ new origin participants =
 merge :: (Eq o, Event e r s, Ord p, Show o, Typeable o)
   => PowerState o s p e r
   -> PowerState o s p e r
-  -> PowerState o s p e r
+  -> (PowerState o s p e r, Map (StateId p) r)
 merge a b = either throw id (mergeEither a b)
 
 
@@ -189,7 +189,7 @@ merge a b = either throw id (mergeEither a b)
 mergeMaybe :: (Eq o, Event e r s, Ord p)
   => PowerState o s p e r
   -> PowerState o s p e r
-  -> Maybe (PowerState o s p e r)
+  -> Maybe (PowerState o s p e r, Map (StateId p) r)
 mergeMaybe a b = either (const Nothing) Just (mergeEither a b)
 
 
@@ -200,7 +200,7 @@ mergeMaybe a b = either (const Nothing) Just (mergeEither a b)
 mergeEither :: (Eq o, Event e r s, Ord p)
   => PowerState o s p e r
   -> PowerState o s p e r
-  -> Either (DifferentOrigins o) (PowerState o s p e r)
+  -> Either (DifferentOrigins o) (PowerState o s p e r, Map (StateId p) r)
 mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     Right . reduce . removeRenegade $ PowerState {
         origin = o1,
@@ -257,7 +257,7 @@ mergeEither PowerState {origin = o1} PowerState {origin = o2} =
 acknowledge :: (Event e r s, Ord p)
   => p
   -> PowerState o s p e r
-  -> PowerState o s p e r
+  -> (PowerState o s p e r, Map (StateId p) r)
 acknowledge p ps@PowerState {events} =
     reduce ps {events = fmap ackOne events}
   where
@@ -421,16 +421,16 @@ divergences peer PowerState {events} =
 -}
 reduce :: (Event e r s, Ord p)
   => PowerState o s p e r
-  -> PowerState o s p e r
+  -> (PowerState o s p e r, Map (StateId p) r)
 reduce ps@PowerState {
     infimum = infimum@Infimum {participants, stateValue},
     events
   } =
     case minViewWithKey events of
-      Nothing -> ps
+      Nothing -> (ps, Map.empty)
       Just ((sid, (update, acks)), newDeltas) ->
         if not . null $ participants \\ acks
-          then ps
+          then (ps, Map.empty)
           else case update of
             Join p -> reduce ps {
                 infimum = infimum {
@@ -446,13 +446,17 @@ reduce ps@PowerState {
                   },
                 events = newDeltas
               }
-            Event e -> reduce ps {
-                infimum = infimum {
-                    stateId = sid,
-                    stateValue = snd (apply e stateValue)
-                  },
-                events = newDeltas
-              }
+            Event e ->
+              let
+                (output, newState) = apply e stateValue
+                (ps2, outputs) = reduce ps {
+                    infimum = infimum {
+                        stateId = sid,
+                        stateValue = newState
+                      },
+                    events = newDeltas
+                  }
+              in (ps2, Map.insert sid output outputs)
 
 
 {- |

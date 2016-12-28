@@ -161,32 +161,35 @@ mergeEither :: (Eq o, Ord p, Event e r s)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
-  -> Either (DifferentOrigins o) (PropState o s p e r)
+  -> Either (DifferentOrigins o) (PropState o s p e r, Map (StateId p) r)
 mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   let ps = unPowerState kernel
   in case PS.mergeEither ps powerState of
     Left err -> Left err
-    Right merged -> Right prop {
-        powerState = merged,
+    Right (merged, outputs) -> Right (
+        prop {
+            powerState = merged,
 
-        {-
-          This algorithm is weaksauce. We need to find someone who knows
-          a lot about gossip protocols to fix this.
-        -}
-        peerStates =
-          Map.fromList $ [
-              (p, ns)
-              | p <- Set.toList (divergent merged)
-              , let ns = fromMaybe (NeedsSendAt now) (lookup p peerStates)
-            ]
-          ++
             {-
-              If the source of the foreign powerstate believes we
-              are divergent, then it is going to keep sending updates
-              until someone clues it in. That someone is us for now.
+              This algorithm is weaksauce. We need to find someone who knows
+              a lot about gossip protocols to fix this.
             -}
-            [(source, NeedsAck) | self `member` divergent ps]
-      }
+            peerStates =
+              Map.fromList $ [
+                  (p, ns)
+                  | p <- Set.toList (divergent merged)
+                  , let ns = fromMaybe (NeedsSendAt now) (lookup p peerStates)
+                ]
+              ++
+                {-
+                  If the source of the foreign powerstate believes we
+                  are divergent, then it is going to keep sending updates
+                  until someone clues it in. That someone is us for now.
+                -}
+                [(source, NeedsAck) | self `member` divergent ps]
+          },
+        outputs
+      )
 
 
 {- |
@@ -197,7 +200,7 @@ mergeMaybe :: (Eq o, Ord p, Event e r s)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
-  -> Maybe (PropState o s p e r)
+  -> Maybe (PropState o s p e r, Map (StateId p) r)
 mergeMaybe source ps prop =
   case mergeEither source ps prop of
     Left _ -> Nothing
@@ -214,7 +217,7 @@ merge :: (Eq o, Ord p, Show o, Event e r s, Typeable o)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
-  -> PropState o s p e r
+  -> (PropState o s p e r, Map (StateId p) r)
 merge source ps prop =
   case mergeEither source ps prop of
     Left err -> throw err

@@ -88,7 +88,7 @@ import Network.Legion.KeySet (KeySet, union)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState, PartitionPropState)
-import Network.Legion.PowerState (Event, apply)
+import Network.Legion.PowerState (Event, apply, StateId)
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -214,34 +214,40 @@ partitionMerge :: (
   => Peer
   -> PartitionKey
   -> PartitionPowerState e o s
-  -> SM e o s ()
+  -> SM e o s (Map (StateId Peer) o)
 partitionMerge source key foreignPartition = do
   partition <- getPartition key
   case P.mergeEither source foreignPartition partition of
-    Left err -> $(logWarn) . pack
-      $ "Can't apply incomming partition merge from "
-      ++ show source ++ ": " ++ show foreignPartition
-      ++ ". because of: " ++ show err
-    Right newPartition -> savePartition key newPartition
+    Left err -> do
+      $(logWarn) . pack
+        $ "Can't apply incomming partition merge from "
+        ++ show source ++ ": " ++ show foreignPartition
+        ++ ". because of: " ++ show err
+      return Map.empty
+    Right (merged, outputs) ->
+      savePartition key merged >> return outputs
 
 
 {- | Handle the state transition for a cluster merge event. -}
 clusterMerge
   :: Peer
   -> ClusterPowerState
-  -> SM e o s ()
+  -> SM e o s (Map (StateId Peer) ())
 clusterMerge source foreignCluster = SM . lift $ do
   nodeState@NodeState {migration, cluster} <- get
   case C.mergeEither source foreignCluster cluster of
-    Left err -> $(logWarn) . pack
-      $ "Can't apply incomming cluster merge from "
-      ++ show source ++ ": " ++ show foreignCluster
-      ++ ". because of: " ++ show err
-    Right (newCluster, newMigration) ->
+    Left err -> do
+      $(logWarn) . pack
+        $ "Can't apply incomming cluster merge from "
+        ++ show source ++ ": " ++ show foreignCluster
+        ++ ". because of: " ++ show err
+      return Map.empty
+    Right ((merged, outputs), newMigration) -> do
       put nodeState {
           migration = migration `union` newMigration,
-          cluster = newCluster
+          cluster = merged
         }
+      return outputs
 
 
 {- |

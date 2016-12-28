@@ -252,7 +252,7 @@ handleMessage {- Partition Merge -}
     (P (PeerMessage source _ (PartitionMerge key ps)))
     (rts, ns)
   = do
-    ((), ns2) <- runSM persistence ns (partitionMerge source key ps)
+    (_outputs, ns2) <- runSM persistence ns (partitionMerge source key ps)
     return (rts, ns2)
 
 handleMessage {- Cluster Merge -}
@@ -260,7 +260,7 @@ handleMessage {- Cluster Merge -}
     (P (PeerMessage source _ (ClusterMerge cs)))
     (rts, ns)
   = do
-    ((), ns2) <- runSM persistence ns (clusterMerge source cs)
+    (_outputs, ns2) <- runSM persistence ns (clusterMerge source cs)
     return (rts, ns2)
 
 handleMessage {- Forward Request -}
