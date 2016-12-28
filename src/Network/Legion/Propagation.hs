@@ -32,6 +32,7 @@ module Network.Legion.Propagation (
 
 import Prelude hiding (lookup)
 
+import Control.Exception (throw)
 import Data.Aeson (ToJSON, object, (.=), toJSON)
 import Data.Binary (Binary)
 import Data.Default.Class (Default)
@@ -40,8 +41,9 @@ import Data.Maybe (fromMaybe)
 import Data.Set (member, Set)
 import Data.Time.Clock (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format () -- For `instance Show UTCTime`
+import Data.Typeable (Typeable)
 import Network.Legion.PowerState (PowerState, divergent, Event,
-  projectedValue, StateId)
+  projectedValue, StateId, DifferentOrigins)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Network.Legion.PowerState as PS
@@ -155,11 +157,11 @@ new origin self participants =
   Like `merge`, but total. `mergeEither` returns a human readable reason why
   the foreign powerstate can't be merged in the event of an error.
 -}
-mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
+mergeEither :: (Eq o, Ord p, Event e r s)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
-  -> Either String (PropState o s p e r)
+  -> Either (DifferentOrigins o) (PropState o s p e r)
 mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   let ps = unPowerState kernel
   in case PS.mergeEither ps powerState of
@@ -191,7 +193,7 @@ mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   Like `merge`, but total. `mergeMaybe` returns `Nothing` if the foreign power
   state can't be merged.
 -}
-mergeMaybe :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
+mergeMaybe :: (Eq o, Ord p, Event e r s)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
@@ -208,14 +210,14 @@ mergeMaybe source ps prop =
   precondition is not met, `error` will be called (making this function
   non-total). Using `mergeMaybe` or `mergeEither` is recommended.
 -}
-merge :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
+merge :: (Eq o, Ord p, Show o, Event e r s, Typeable o)
   => p
   -> PropPowerState o s p e r
   -> PropState o s p e r
   -> PropState o s p e r
 merge source ps prop =
   case mergeEither source ps prop of
-    Left err -> error err
+    Left err -> throw err
     Right v -> v
 
 

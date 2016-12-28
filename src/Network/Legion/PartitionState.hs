@@ -29,7 +29,7 @@ import Data.Set (Set)
 import Data.Time.Clock (UTCTime)
 import Network.Legion.Distribution (Peer)
 import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PowerState (Event)
+import Network.Legion.PowerState (Event, DifferentOrigins)
 import Network.Legion.Propagation (PropState, PropPowerState)
 import qualified Network.Legion.Propagation as P
 
@@ -73,12 +73,12 @@ ask = P.ask . unPropState
 {- |
   Try to merge two partition states.
 -}
-mergeEither :: (Show e, Show s, Event e o s)
+mergeEither :: (Event e o s)
   => Peer
   -> PartitionPowerState e o s
   -> PartitionPropState e o s
   -> Either
-      String
+      (DifferentOrigins PartitionKey)
       (PartitionPropState e o s)
 mergeEither peer ps prop =
   PartitionPropState <$>

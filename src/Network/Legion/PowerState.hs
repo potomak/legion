@@ -14,6 +14,7 @@ module Network.Legion.PowerState (
   PowerState,
   Event(..),
   StateId,
+  DifferentOrigins(..),
 
   new,
   event,
@@ -36,6 +37,7 @@ module Network.Legion.PowerState (
 
 import Prelude hiding (null)
 
+import Control.Exception (throw, Exception)
 import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary(put, get))
 import Data.Default.Class (Default(def))
@@ -43,6 +45,7 @@ import Data.DoubleWord (Word256(Word256), Word128(Word128))
 import Data.Map (Map, filterWithKey, unionWith, minViewWithKey, keys,
   toDescList, toAscList, fromAscList)
 import Data.Set (Set, union, (\\), null, member)
+import Data.Typeable (Typeable)
 import Data.Word (Word64)
 import GHC.Generics (Generic)
 import qualified Data.Map as Map
@@ -121,6 +124,14 @@ instance Default (StateId p) where
 
 
 {- |
+  This is the exception type for illegal merges. An illegal merge is
+  one where the two PowerStates do not share the same origin.
+-}
+data DifferentOrigins o = DifferentOrigins o o deriving (Show, Typeable)
+instance (Typeable o, Show o) => Exception (DifferentOrigins o)
+
+
+{- |
   `Delta` is how we represent mutations to the power state.
 -}
 data Delta p e
@@ -164,18 +175,18 @@ new origin participants =
   a lower one. This function is not total. Only `PowerState`s that originated
   from the same `new` call can be merged.
 -}
-merge :: (Eq o, Event e r s, Ord p, Show o, Show s, Show p, Show e)
+merge :: (Eq o, Event e r s, Ord p, Show o, Typeable o)
   => PowerState o s p e r
   -> PowerState o s p e r
   -> PowerState o s p e r
-merge a b = either error id (mergeEither a b)
+merge a b = either throw id (mergeEither a b)
 
 
 {- |
   Like `merge`, but safe. Returns `Nothing` if the two power states do
   not share the same origin.
 -}
-mergeMaybe :: (Eq o, Event e r s, Ord p, Show o, Show s, Show p, Show e)
+mergeMaybe :: (Eq o, Event e r s, Ord p)
   => PowerState o s p e r
   -> PowerState o s p e r
   -> Maybe (PowerState o s p e r)
@@ -186,10 +197,10 @@ mergeMaybe a b = either (const Nothing) Just (mergeEither a b)
   Like `mergeMaybe`, but returns a human-decipherable error message of
   exactly what went wrong.
 -}
-mergeEither :: (Eq o, Event e r s, Ord p, Show o, Show s, Show p, Show e)
+mergeEither :: (Eq o, Event e r s, Ord p)
   => PowerState o s p e r
   -> PowerState o s p e r
-  -> Either String (PowerState o s p e r)
+  -> Either (DifferentOrigins o) (PowerState o s p e r)
 mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
     Right . reduce . removeRenegade $ PowerState {
         origin = o1,
@@ -234,9 +245,8 @@ mergeEither (PowerState o1 i1 d1) (PowerState o2 i2 d2) | o1 == o2 =
 
     mergeAcks (e, s1) (_, s2) = (e, s1 `union` s2)
 
-mergeEither a b = Left
-  $ "PowerStates " ++ show a ++ " and " ++ show b ++ " do not share the "
-  ++ "same origin, and cannot be merged."
+mergeEither PowerState {origin = o1} PowerState {origin = o2} =
+  Left (DifferentOrigins o1 o2)
 
 
 {- |
