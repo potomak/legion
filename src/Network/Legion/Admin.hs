@@ -18,6 +18,8 @@ import Control.Monad.Logger (askLoggerIO, runLoggingT, logDebug)
 import Control.Monad.Trans.Class (lift)
 import Data.Conduit (Source)
 import Data.Default.Class (def)
+import Data.Map (Map)
+import Data.Set (Set)
 import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Lazy (Text)
 import Data.Version (showVersion)
@@ -25,9 +27,10 @@ import Network.HTTP.Types (notFound404)
 import Network.Legion.Application (LegionConstraints)
 import Network.Legion.Conduit (chanToSource)
 import Network.Legion.Distribution (Peer)
+import Network.Legion.Index (IndexRecord)
 import Network.Legion.LIO (LIO)
 import Network.Legion.Lift (lift2)
-import Network.Legion.PartitionKey (PartitionKey(K))
+import Network.Legion.PartitionKey (PartitionKey(K), unKey)
 import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.StateMachine.Monad (NodeState)
 import Network.Wai (Middleware, modifyResponse)
@@ -40,6 +43,7 @@ import Text.Read (readMaybe)
 import Web.Scotty.Resource.Trans (resource, get, delete)
 import Web.Scotty.Trans (Options, scottyOptsT, settings, ScottyT, ActionT,
   param, middleware, status, json)
+import qualified Data.Map as Map
 import qualified Data.Text as T
 
 {- |
@@ -62,9 +66,17 @@ runAdmin addr host = do
             . logExceptionsAndContinue logging
 
           resource "/clusterstate" $
+            get $ json =<< send chan GetState
+          resource "/index" $
+            get $ json =<< send chan GetIndex
+          resource "/divergent" $
             get $
-              json =<< send chan GetState
-          resource "/propstate/:key" $
+              json . Map.mapKeys (show . toInteger . unKey) =<< send chan GetDivergent
+          resource "/partitions" $
+            get $
+              json . Map.mapKeys (show . toInteger . unKey) =<< send chan GetStates
+              
+          resource "/partitions/:key" $
             get $ do
               key <- K . read <$> param "key"
               json =<< send chan (GetPart key)
@@ -130,10 +142,16 @@ data AdminMessage e o s
   = GetState (NodeState e o s -> LIO ())
   | GetPart PartitionKey (PartitionPowerState e o s -> LIO ())
   | Eject Peer (() -> LIO ())
+  | GetIndex (Set IndexRecord -> LIO ())
+  | GetDivergent (Map PartitionKey (PartitionPowerState e o s) -> LIO ())
+  | GetStates (Map PartitionKey (PartitionPowerState e o s) -> LIO ())
 
 instance Show (AdminMessage e o s) where
   show (GetState _) = "(GetState _)"
   show (GetPart k _) = "(GetPart " ++ show k ++ " _)"
   show (Eject p _) = "(Eject " ++ show p ++ " _)"
+  show (GetIndex _) = "(GetIndex _)"
+  show (GetDivergent _) = "(GetDivergent _)"
+  show (GetStates _) = "(GetStates _)"
 
 

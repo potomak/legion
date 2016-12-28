@@ -448,6 +448,7 @@ savePartition key partition = do
         else Nothing
     ))
   modifyNodeState (\ns@NodeState {partitions, nsIndex} ->
+      nsIndex `seq`
       ns {
           partitions = if Set.null (PS.divergent partition)
             then

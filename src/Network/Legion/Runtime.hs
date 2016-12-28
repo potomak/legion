@@ -37,8 +37,8 @@ import Data.Set (Set)
 import Data.Text (pack)
 import GHC.Generics (Generic)
 import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
-  Eject))
-import Network.Legion.Application (LegionConstraints, Persistence)
+  Eject, GetIndex, GetDivergent, GetStates))
+import Network.Legion.Application (LegionConstraints, Persistence, list)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
@@ -113,17 +113,15 @@ runLegionary
     peerS <- loggingC =<< startPeerListener settings
     adminS <- loggingC =<< runAdmin adminPort adminHost
     joinS <- loggingC (joinMsgSource settings)
-    loopChan <- lift newChan
 
     (self, nodeState, peers) <- makeNodeState settings startupMode
-    rts <- newRuntimeState self peers (writeChan loopChan)
+    rts <- newRuntimeState self peers
     let
       messageSource = transPipe lift (
           (joinS =$= CL.map J) `merge`
           (peerS =$= CL.map P) `merge`
           (requestSource =$= CL.map R) `merge`
-          (adminS =$= CL.map A) `merge`
-          chanToSource loopChan
+          (adminS =$= CL.map A)
         )
     void . runRTS persistence nodeState rts . runConduit $
       messageSource
@@ -132,9 +130,8 @@ runLegionary
     newRuntimeState :: (Binary e, Binary o, Binary s)
       => Peer
       -> Map Peer BSockAddr
-      -> (RuntimeMessage e o s -> IO ())
       -> LoggingT IO (RuntimeState e o s)
-    newRuntimeState self peers loop = do
+    newRuntimeState self peers = do
       cm <- newConnectionManager peers
       firstMessageId <- newSequence
       return RuntimeState {
@@ -142,8 +139,7 @@ runLegionary
           nextId = firstMessageId,
           cm,
           self,
-          searches = Map.empty,
-          loop
+          searches = Map.empty
         }
 
     {- |
@@ -428,6 +424,25 @@ handleMessage {- Admin Eject Peer -}
     -}
     eject peer
     lift2 $ respond ()
+
+handleMessage {- Admin Get Index -}
+    (A (GetIndex respond))
+  =
+    lift2 . respond =<< SMM.nsIndex <$> SMM.getNodeState
+
+handleMessage {- Admin Get Divergent -}
+    (A (GetDivergent respond))
+  =
+    lift2 . respond =<< SMM.partitions <$> SMM.getNodeState
+
+handleMessage {- Admin Get States -}
+    (A (GetStates respond))
+  = do
+    persistence <- SMM.getPersistence
+    lift2 . respond . Map.fromList =<< runConduit (
+        transPipe liftIO (list persistence)
+        =$= CL.consume
+      )
 
 
 {- | This defines the various ways a node can be spun up. -}
@@ -756,9 +771,7 @@ data RuntimeState e o s = RuntimeState {
            cm :: ConnectionManager e o s,
      searches :: Map
                   SearchTag
-                  (Set Peer, Maybe IndexRecord, [Maybe IndexRecord -> LIO ()]),
-         loop :: RuntimeMessage e o s -> IO ()
-                 {- ^ A way to send messages back into the message handler. -}
+                  (Set Peer, Maybe IndexRecord, [Maybe IndexRecord -> LIO ()])
   }
 
 
