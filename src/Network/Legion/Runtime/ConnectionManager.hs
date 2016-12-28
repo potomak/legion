@@ -15,7 +15,7 @@ module Network.Legion.Runtime.ConnectionManager (
 import Prelude hiding (lookup)
 
 import Control.Concurrent (Chan, writeChan, newChan, readChan)
-import Control.Exception (try, SomeException)
+import Control.Exception (try, SomeException, bracketOnError)
 import Control.Monad (void)
 import Control.Monad.Logger (logInfo, logWarn)
 import Control.Monad.Trans.Class (lift)
@@ -104,10 +104,18 @@ connection addr = do
 
     {- | Open a socket. -}
     openSocket :: IO Socket
-    openSocket = do
-      so <- socket (fam addr) Stream defaultProtocol
-      connect so addr
-      return so
+    openSocket =
+      {-
+        Make sure to close the socket if an error happens during
+        connection, because if not, we could easily run out of file
+        descriptors in the case where we rapidly try to send thousands
+        of message to the same peer, which could happen when one object
+        is a hotspot.
+      -}
+      bracketOnError
+        (socket (fam addr) Stream defaultProtocol)
+        close
+        (\so -> connect so addr >> return so)
 
     {- |
       Try to send the payload over the socket, and if that fails, then try to
