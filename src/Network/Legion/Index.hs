@@ -8,12 +8,14 @@ module Network.Legion.Index (
   SearchTag(..),
 ) where
 
+import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary)
 import Data.ByteString (ByteString)
 import Data.Set (Set)
 import Data.String (IsString)
+import Data.Text.Encoding (decodeUtf8)
 import GHC.Generics (Generic)
-import Network.Legion.PartitionKey (PartitionKey)
+import Network.Legion.PartitionKey (PartitionKey, unKey)
 
 
 {- | This typeclass provides the ability to index partition states. -}
@@ -41,6 +43,10 @@ data IndexRecord = IndexRecord {
   }
   deriving (Eq, Ord, Show, Generic)
 instance Binary IndexRecord
+instance ToJSON IndexRecord where
+  toJSON (IndexRecord tag key) = object [
+      (decodeUtf8 . unTag) tag .= toInteger (unKey key)
+    ]
 
 
 {- | This data structure describes where in the index to start scrolling. -}

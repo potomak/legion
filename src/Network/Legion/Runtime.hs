@@ -37,8 +37,8 @@ import Data.Set (Set)
 import Data.Text (pack)
 import GHC.Generics (Generic)
 import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
-  Eject))
-import Network.Legion.Application (LegionConstraints, Persistence)
+  Eject, GetIndex, GetDivergent, GetStates))
+import Network.Legion.Application (LegionConstraints, Persistence, list)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
@@ -424,6 +424,25 @@ handleMessage {- Admin Eject Peer -}
     -}
     eject peer
     lift2 $ respond ()
+
+handleMessage {- Admin Get Index -}
+    (A (GetIndex respond))
+  =
+    lift2 . respond =<< SMM.nsIndex <$> SMM.getNodeState
+
+handleMessage {- Admin Get Divergent -}
+    (A (GetDivergent respond))
+  =
+    lift2 . respond =<< SMM.partitions <$> SMM.getNodeState
+
+handleMessage {- Admin Get States -}
+    (A (GetStates respond))
+  = do
+    persistence <- SMM.getPersistence
+    lift2 . respond . Map.fromList =<< runConduit (
+        transPipe liftIO (list persistence)
+        =$= CL.consume
+      )
 
 
 {- | This defines the various ways a node can be spun up. -}
