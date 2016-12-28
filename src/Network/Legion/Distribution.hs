@@ -138,7 +138,6 @@ rebalanceAction allPeers distribution =
       in
         unD (modify (Set.\\ defunct) KS.full distribution)
 
-
     {- |
       Figure out if there are any under-served partitions and also figure
       out if this peer is the best candidate to service them . "Under

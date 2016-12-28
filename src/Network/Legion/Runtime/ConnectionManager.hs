@@ -102,9 +102,7 @@ connection addr = do
     handle chan so =
       lift (readChan chan) >>= sendWithRetry so . encode >>= handle chan
 
-    {- |
-      Open a socket.
-    -}
+    {- | Open a socket. -}
     openSocket :: IO Socket
     openSocket = do
       so <- socket (fam addr) Stream defaultProtocol
