@@ -109,22 +109,27 @@ runLegionary
     joinS <- loggingC (joinMsgSource settings)
 
     (self, nodeState, peers) <- makeNodeState settings startupMode
-    cm <- newConnectionManager peers
-
-    firstMessageId <- newSequence
-    let
-      rts = RuntimeState {
+    rts <- newRuntimeState self peers
+    runConduit $
+      (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
+        =$= CL.map toMessage
+        =$= messageSink persistence (rts, nodeState)
+  where
+    newRuntimeState :: (Binary e, Binary o, Binary s)
+      => Peer
+      -> Map Peer BSockAddr
+      -> LoggingT IO (RuntimeState e o s)
+    newRuntimeState self peers = do
+      cm <- newConnectionManager peers
+      firstMessageId <- newSequence
+      return RuntimeState {
           forwarded = Map.empty,
           nextId = firstMessageId,
           cm,
           self,
           searches = Map.empty
         }
-    runConduit $
-      (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
-        =$= CL.map toMessage
-        =$= messageSink persistence (rts, nodeState)
-  where
+
     toMessage
       :: Either
           (JoinRequest, JoinResponse -> LIO ())
