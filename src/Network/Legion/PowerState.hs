@@ -3,7 +3,13 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
-{- | This module contains the fundamental distributed data object. -}
+{- |
+  This module contains the fundamental distributed data object.
+
+  A note on terminology, "divergent" in this context referes to events
+  which are not known to have been acknowledged by all participating
+  peers.
+-}
 module Network.Legion.PowerState (
   PowerState,
   Infimum(..),
@@ -137,7 +143,8 @@ class Event e o s | e -> s o where
 
 
 {- |
-  Construct a new PowerState with the given origin and initial participants
+  Construct a new PowerState with the given origin and initial
+  participants.
 -}
 new :: (Default s) => o -> Set p -> PowerState o s p e r
 new origin participants =
@@ -345,8 +352,8 @@ projParticipants PowerState {
 
 {- |
   Returns the participants that we think might be diverging. In this
-  context, a peer is "diverging" if there is an event that the peer has
-  not acknowledged.
+  context, a participant is "diverging" if there is an event that the
+  participant has not acknowledged.
 -}
 divergent :: (Ord p) => PowerState o s p e r -> Set p
 divergent PowerState {
@@ -358,7 +365,7 @@ divergent PowerState {
     {- |
       `accum` mnemonics:
         j = pro(J)ected participants
-        d = (D)ivergent participants
+        d = (D)iverging participants
         a = peers that have (A)cknowledged an update.
         p = (P)eer that is joining or unjoining
     -}
