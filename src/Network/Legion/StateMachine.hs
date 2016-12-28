@@ -35,10 +35,7 @@
 -}
 module Network.Legion.StateMachine(
   -- * Running the state machine.
-  NodeState,
   newNodeState,
-  SM,
-  runSM,
 
   -- * State machine inputs.
   userRequest,
@@ -54,7 +51,6 @@ module Network.Legion.StateMachine(
   search,
 
   -- * State machine outputs.
-  ClusterAction(..),
   UserResponse(..),
 
   -- * State inspection
@@ -65,31 +61,28 @@ import Control.Monad (unless)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (MonadLogger, logWarn, logDebug, logError,
   MonadLoggerIO)
-import Control.Monad.Trans.Class (lift, MonadTrans)
-import Control.Monad.Trans.Reader (ReaderT, runReaderT, ask)
-import Control.Monad.Trans.State (StateT, runStateT, get, put, modify)
-import Data.Aeson (ToJSON, toJSON, object, (.=), encode)
-import Data.ByteString.Lazy (toStrict)
+import Control.Monad.Trans.Class (lift)
 import Data.Conduit (($=), ($$), Sink, transPipe, awaitForever)
 import Data.Default.Class (Default)
 import Data.Map (Map)
 import Data.Maybe (fromMaybe)
 import Data.Set (Set, (\\))
-import Data.Text (pack, unpack)
-import Data.Text.Encoding (decodeUtf8)
+import Data.Text (pack)
 import Data.Time.Clock (getCurrentTime)
-import Network.Legion.Application (getState, saveState, list, Persistence)
+import Network.Legion.Application (getState, saveState, list)
 import Network.Legion.BSockAddr (BSockAddr)
 import Network.Legion.ClusterState (ClusterPropState, ClusterPowerState)
 import Network.Legion.Distribution (Peer, rebalanceAction, newPeer,
   RebalanceAction(Invite))
 import Network.Legion.Index (IndexRecord(IndexRecord), stTag, stKey,
   irTag, irKey, SearchTag(SearchTag), indexEntries, Indexable)
-import Network.Legion.KeySet (KeySet, union)
-import Network.Legion.Lift (lift2)
+import Network.Legion.KeySet (union)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState, PartitionPropState)
 import Network.Legion.PowerState (Event, apply, StateId)
+import Network.Legion.StateMachine.Monad (SM, NodeState(NodeState),
+  ClusterAction(PartitionMerge, ClusterMerge), self, cluster, partitions,
+  migration, nsIndex, getPersistence, getNodeState, modifyNodeState)
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -97,34 +90,6 @@ import qualified Network.Legion.ClusterState as C
 import qualified Network.Legion.Distribution as D
 import qualified Network.Legion.KeySet as KS
 import qualified Network.Legion.PartitionState as P
-
-
-{- |
-  This is the portion of the local node state that is not persistence
-  related.
--}
-data NodeState e o s = NodeState {
-             self :: Peer,
-          cluster :: ClusterPropState,
-       partitions :: Map PartitionKey (PartitionPropState e o s),
-        migration :: KeySet,
-          nsIndex :: Set IndexRecord
-  }
-instance (Show e, Show s) => Show (NodeState e o s) where
-  show = unpack . decodeUtf8 . toStrict . encode
-{-
-  The ToJSON instance is mainly for debugging. The Haskell-generated 'Show'
-  instance is very hard to read.
--}
-instance (Show e, Show s) => ToJSON (NodeState e o s) where
-  toJSON (NodeState self cluster partitions migration nsIndex) =
-    object [
-              "self" .= show self,
-           "cluster" .= cluster,
-        "partitions" .= Map.mapKeys show partitions,
-         "migration" .= show migration,
-           "nsIndex" .= show nsIndex
-      ]
 
 
 {- | Make a new node state. -}
@@ -139,41 +104,6 @@ newNodeState self cluster =
     }
 
 
-{- |
-  This monad encapsulates the global state of the legion node (not
-  counting the runtime stuff, like open connections and what have
-  you).
-
-  The main reason that the state is hidden behind a monad is because part
-  of the sate (i.e. the partition data) lives behind 'IO'.  Therefore,
-  if we want to model the global state of the node as a single unit,
-  we have to do so using a monad.
--}
-newtype SM e o s m a = SM {
-    unSM ::
-      ReaderT (Persistence e o s) (
-      StateT (NodeState e o s)
-      m) a
-  }
-  deriving (Functor, Applicative, Monad, MonadLogger)
-instance MonadTrans (SM e o s) where
-  lift = SM . lift2
-
-
-{- |
-  Run an SM action.
--}
-runSM
-  :: Persistence e o s
-  -> NodeState e o s
-  -> SM e o s m a
-  -> m (a, NodeState e o s)
-runSM p ns =
-  (`runStateT` ns)
-  . (`runReaderT` p)
-  . unSM
-
-
 {- | Handle a user request. -}
 userRequest :: (
       Event e o s,
@@ -184,16 +114,16 @@ userRequest :: (
   => PartitionKey
   -> e
   -> SM e o s m (UserResponse o)
-userRequest key request = SM $ do
-  NodeState {self, cluster} <- lift get
+userRequest key request = do
+  NodeState {self, cluster} <- getNodeState
   let owners = C.findPartition key cluster
   if self `Set.member` owners
     then do
-      partition <- unSM $ getPartition key
+      partition <- getPartition key
       let
         response = fst (apply request (P.ask partition))
         partition2 = P.event request partition
-      unSM $ savePartition key partition2
+      savePartition key partition2
       return (Respond response)
 
     else case Set.toList owners of
@@ -238,8 +168,8 @@ clusterMerge :: (MonadLogger m)
   => Peer
   -> ClusterPowerState
   -> SM e o s m (Map (StateId Peer) ())
-clusterMerge source foreignCluster = SM . lift $ do
-  nodeState@NodeState {migration, cluster} <- get
+clusterMerge source foreignCluster = do
+  NodeState {cluster} <- getNodeState
   case C.mergeEither source foreignCluster cluster of
     Left err -> do
       $(logWarn) . pack
@@ -248,10 +178,10 @@ clusterMerge source foreignCluster = SM . lift $ do
         ++ ". because of: " ++ show err
       return Map.empty
     Right ((merged, outputs), newMigration) -> do
-      put nodeState {
-          migration = migration `union` newMigration,
+      modifyNodeState (\ns -> ns {
+          migration = migration ns `union` newMigration,
           cluster = merged
-        }
+        })
       return outputs
 
 
@@ -270,18 +200,18 @@ clusterMerge source foreignCluster = SM . lift $ do
 migrate :: (Default s, Event e o s, Indexable s, MonadLoggerIO m)
   => SM e o s m ()
 migrate = do
-    NodeState {migration} <- (SM . lift) get
-    persistence <- SM ask
+    NodeState {migration} <- getNodeState
+    persistence <- getPersistence
     unless (KS.null migration) $
-      transPipe (SM . lift2 . liftIO) (list persistence)
+      transPipe liftIO (list persistence)
       $= CL.filter ((`KS.member` migration) . fst)
       $$ accum
-    (SM . lift) $ modify (\ns -> ns {migration = KS.empty})
+    modifyNodeState (\ns -> ns {migration = KS.empty})
   where
     accum :: (Default s, Event e o s, Indexable s, MonadLoggerIO m)
       => Sink (PartitionKey, PartitionPowerState e o s) (SM e o s m) ()
     accum = awaitForever $ \ (key, ps) -> do
-      NodeState {self, cluster, partitions} <- (lift . SM . lift) get
+      NodeState {self, cluster, partitions} <- lift getNodeState
       let
         partition = fromMaybe (P.initProp self ps) (Map.lookup key partitions)
         newPeers = C.findPartition key cluster \\ P.projParticipants partition
@@ -295,13 +225,13 @@ migrate = do
   an updated node state.
 -}
 propagate :: (Monad m) => SM e o s m [ClusterAction e o s]
-propagate = SM $ do
+propagate = do
     partitionActions <- getPartitionActions
-    clusterActions <- unSM getClusterActions
+    clusterActions <- getClusterActions
     return (clusterActions ++ partitionActions)
   where
     getPartitionActions = do
-      ns@NodeState {partitions} <- lift get
+      NodeState {partitions} <- getNodeState
       let
         updates = [
             (key, newPartition, [
@@ -317,20 +247,20 @@ propagate = SM $ do
             | (key, newPartition, _) <- updates
             , not (P.idle newPartition)
           ]
-      (lift . put) ns {
+      modifyNodeState (\ns -> ns {
           partitions = newPartitions
-        }
+        })
       return actions
 
     getClusterActions :: (Monad m) => SM e o s m [ClusterAction e o s]
-    getClusterActions = SM $ do
-      ns@NodeState {cluster} <- lift get
+    getClusterActions = do
+      NodeState {cluster} <- getNodeState
       let
         (peers, cs, newCluster) = C.actions cluster
         actions = [ClusterMerge peer cs | peer <- Set.toList peers]
-      (lift . put) ns {
+      modifyNodeState (\ns -> ns {
           cluster = newCluster
-        }
+        })
       return actions
 
 
@@ -339,14 +269,14 @@ propagate = SM $ do
   them off if so.
 -}
 rebalance :: (MonadLogger m) => SM e o s m ()
-rebalance = SM $ do
-  ns@NodeState {self, cluster} <- lift get
+rebalance = do
+  NodeState {self, cluster} <- getNodeState
   let
     allPeers = (Set.fromList . Map.keys . C.getPeers) cluster
     dist = C.getDistribution cluster
     action = rebalanceAction self allPeers dist
   $(logDebug) . pack $ "The rebalance action is: " ++ show action
-  (lift . put) ns {
+  modifyNodeState (\ns -> ns {
       cluster = case action of
         Nothing -> cluster
         Just (Invite ks) ->
@@ -356,39 +286,41 @@ rebalance = SM $ do
             and then perform a 'migrate'.
           -}
           C.claimParticipation self ks cluster
-    }
+    })
 
 
 {- | Update all of the propagation states with the current time.  -}
 heartbeat :: (MonadIO m) => SM e o s m ()
-heartbeat = SM $ do
-  now <- (lift2 . liftIO) getCurrentTime
-  ns@NodeState {cluster, partitions} <- lift get
-  (lift . put) ns {
+heartbeat = do
+  now <- liftIO getCurrentTime
+  modifyNodeState (\ns@NodeState {cluster, partitions} -> ns {
       cluster = C.heartbeat now cluster,
       partitions = Map.fromAscList [
           (k, P.heartbeat now p)
           | (k, p) <- Map.toAscList partitions
         ]
-    }
+    })
 
 
 {- | Eject a peer from the cluster.  -}
 eject :: (Monad m) => Peer -> SM e o s m ()
-eject peer = SM . lift $ do
-  ns@NodeState {cluster} <- get
-  put ns {cluster = C.eject peer cluster}
+eject peer =
+  modifyNodeState (\ns@NodeState {cluster} -> ns {
+      cluster = C.eject peer cluster
+    })
 
 
 {- | Handle a peer join request.  -}
 join :: (MonadIO m)
   => BSockAddr
   -> SM e o s m (Peer, ClusterPowerState)
-join peerAddr = SM $ do
-  peer <- lift2 newPeer
-  ns@NodeState {cluster} <- lift get
+join peerAddr = do
+  peer <- liftIO newPeer
+  NodeState {cluster} <- getNodeState
   let newCluster = C.joinCluster peer peerAddr cluster
-  (lift . put) ns {cluster = newCluster}
+  modifyNodeState (\ns -> ns {
+      cluster = newCluster
+    })
   return (peer, C.getPowerState newCluster)
 
 
@@ -416,8 +348,8 @@ join peerAddr = SM $ do
   TODO: implement fastest competitive search.
 -}
 minimumCompleteServiceSet :: (Monad m) => SM e o s m (Set Peer)
-minimumCompleteServiceSet = SM $ do
-  NodeState {cluster} <- lift get
+minimumCompleteServiceSet = do
+  NodeState {cluster} <- getNodeState
   return (D.minimumCompleteServiceSet (C.getDistribution cluster))
 
 
@@ -426,22 +358,12 @@ minimumCompleteServiceSet = SM $ do
   greater than__ the provided search tag, if such a record exists.
 -}
 search :: (Monad m) => SearchTag -> SM e o s m (Maybe IndexRecord)
-search SearchTag {stTag, stKey = Nothing} = SM $ do
-  NodeState {nsIndex} <- lift get
+search SearchTag {stTag, stKey = Nothing} = do
+  NodeState {nsIndex} <- getNodeState
   return (Set.lookupGE IndexRecord {irTag = stTag, irKey = minBound} nsIndex)
-search SearchTag {stTag, stKey = Just key} = SM $ do
-  NodeState {nsIndex} <- lift get
+search SearchTag {stTag, stKey = Just key} = do
+  NodeState {nsIndex} <- getNodeState
   return (Set.lookupGT IndexRecord {irTag = stTag, irKey = key} nsIndex)
-
-
-{- |
-  These are the actions that a node can take which allow it to coordinate
-  with other nodes. It is up to the runtime system to implement the
-  actions.
--}
-data ClusterAction e o s
-  = ClusterMerge Peer ClusterPowerState
-  | PartitionMerge Peer PartitionKey (PartitionPowerState e o s)
 
 
 {- |
@@ -455,19 +377,19 @@ data UserResponse o
 
 {- | Get the known peer data from the cluster. -}
 getPeers :: (Monad m) => SM e o s m (Map Peer BSockAddr)
-getPeers = SM $ C.getPeers . cluster <$> lift get
+getPeers = C.getPeers . cluster <$> getNodeState
 
 
 {- | Gets a partition state. -}
 getPartition :: (Default s, MonadIO m)
   => PartitionKey
   -> SM e o s m (PartitionPropState e o s)
-getPartition key = SM $ do
-  persistence <- ask
-  NodeState {self, partitions, cluster} <- lift get
+getPartition key = do
+  persistence <- getPersistence
+  NodeState {self, partitions, cluster} <- getNodeState
   case Map.lookup key partitions of
     Nothing ->
-      (lift2 . liftIO) (getState persistence key) <&> \case
+      liftIO (getState persistence key) <&> \case
         Nothing -> P.new key self (C.findPartition key cluster)
         Just partition -> P.initProp self partition
     Just partition -> return partition
@@ -481,9 +403,9 @@ savePartition :: (Default s, Event e o s, Indexable s, MonadLoggerIO m)
   => PartitionKey
   -> PartitionPropState e o s
   -> SM e o s m ()
-savePartition key partition = SM $ do
-  persistence <- ask
-  oldTags <- indexEntries . P.ask <$> unSM (getPartition key)
+savePartition key partition = do
+  persistence <- getPersistence
+  oldTags <- indexEntries . P.ask <$> getPartition key
   let
     currentTags = indexEntries (P.ask partition)
     {- TODO: maybe use Set.mapMonotonic for performance?  -}
@@ -494,13 +416,12 @@ savePartition key partition = SM $ do
     $ "Tagging " ++ show key ++ " with: "
     ++ show (currentTags, obsoleteRecords, newRecords)
 
-  ns@NodeState {partitions, nsIndex} <- lift get
-  (lift2 . liftIO) (saveState persistence key (
+  liftIO (saveState persistence key (
       if P.participating partition
         then Just (P.getPowerState partition)
         else Nothing
     ))
-  lift $ put ns {
+  modifyNodeState (\ns@NodeState {partitions, nsIndex} -> ns {
       partitions = if P.idle partition
         then
           {-
@@ -512,7 +433,7 @@ savePartition key partition = SM $ do
         else
           Map.insert key partition partitions,
       nsIndex = (nsIndex \\ obsoleteRecords) `Set.union` newRecords
-    }
+    })
 
 
 {- | Borrowed from 'lens', like @flip fmap@. -}

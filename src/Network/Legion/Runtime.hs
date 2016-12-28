@@ -56,9 +56,9 @@ import Network.Legion.Runtime.PeerMessage (PeerMessage(PeerMessage),
 import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 import Network.Legion.StateMachine (partitionMerge, clusterMerge,
-  NodeState, newNodeState, runSM, UserResponse(Forward, Respond),
-  userRequest, heartbeat, rebalance, migrate, propagate, ClusterAction,
-  eject, minimumCompleteServiceSet)
+  newNodeState, UserResponse(Forward, Respond), userRequest, heartbeat,
+  rebalance, migrate, propagate, eject, minimumCompleteServiceSet)
+import Network.Legion.StateMachine.Monad (NodeState, runSM, ClusterAction)
 import Network.Legion.UUID (getUUID)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bind,
@@ -70,6 +70,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Network.Legion.ClusterState as C
 import qualified Network.Legion.StateMachine as SM
+import qualified Network.Legion.StateMachine.Monad as SMM
 
 
 {- |
@@ -222,14 +223,14 @@ clusterAction
   -> LIO (RuntimeState e o s)
 
 clusterAction
-    (SM.ClusterMerge peer ps)
+    (SMM.ClusterMerge peer ps)
     rts@RuntimeState {self, nextId, cm}
   = do
     send cm peer (PeerMessage self nextId (ClusterMerge ps))
     return rts {nextId = nextMessageId nextId}
 
 clusterAction
-    (SM.PartitionMerge peer key ps)
+    (SMM.PartitionMerge peer key ps)
     rts@RuntimeState {self, nextId, cm}
   = do
     send cm peer (PeerMessage self nextId (PartitionMerge key ps))

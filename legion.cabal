@@ -47,6 +47,7 @@ library
     Network.Legion.Runtime.PeerMessage
     Network.Legion.Settings
     Network.Legion.StateMachine
+    Network.Legion.StateMachine.Monad
     Network.Legion.UUID
     Paths_legion
   -- other-extensions:

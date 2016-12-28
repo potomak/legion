@@ -29,7 +29,7 @@ import Network.Legion.LIO (LIO)
 import Network.Legion.Lift (lift2)
 import Network.Legion.PartitionKey (PartitionKey(K))
 import Network.Legion.PartitionState (PartitionPowerState)
-import Network.Legion.StateMachine (NodeState)
+import Network.Legion.StateMachine.Monad (NodeState)
 import Network.Wai (Middleware, modifyResponse)
 import Network.Wai.Handler.Warp (HostPreference, defaultSettings, Port,
   setHost, setPort)
