@@ -120,7 +120,7 @@ connection addr = do
         Left err -> do
           $(logWarn) . pack
             $ "Can't connect to: " ++ show addr ++ ". Dropping message on "
-            ++ "the floor: " ++ show payload ++ ". The error was: "
+            ++ "the floor. The error was: "
             ++ show (err :: SomeException)
           return Nothing
         Right so -> do
@@ -130,8 +130,7 @@ connection addr = do
               $ "An error happend when trying to send a payload over a socket "
               ++ "to the address: " ++ show addr ++ ". The error was: "
               ++ show (err :: SomeException) ++ ". This is the last straw, we "
-              ++ "are not retrying. The message is being dropped on the floor. "
-              ++ "The message was: " ++ show payload
+              ++ "are not retrying. The message is being dropped on the floor."
             Right _ -> return ()
           return (Just so)
     sendWithRetry (Just so) payload =
