@@ -4,6 +4,7 @@
 module Network.Legion.Conduit (
   chanToSource,
   chanToSink,
+  mergeE,
   merge,
 ) where
 
@@ -37,11 +38,23 @@ chanToSink chan = awaitForever (liftIO . writeChan chan)
   that same source, but the interleaving of items from both sources
   is nondeterministic.
 -}
-merge :: (MonadIO io) => Source IO a -> Source IO b -> Source io (Either a b)
-merge left right = do
+mergeE :: (MonadIO io) => Source IO a -> Source IO b -> Source io (Either a b)
+mergeE left right = do
   chan <- liftIO newChan
   (liftIO . void . forkIO) (left $= CL.map Left $$ chanToSink chan)
   (liftIO . void . forkIO) (right $= CL.map Right $$ chanToSink chan)
   chanToSource chan
+
+
+{- |
+  Like `mergeE`, but without `Either` in the type signature, because
+  both input sources are of the same type.
+-}
+merge :: (MonadIO io) => Source IO a -> Source IO a -> Source io a
+merge left right = mergeE left right $= CL.map unEither
+  where
+    unEither :: Either a a -> a
+    unEither (Left a) = a
+    unEither (Right a) = a
 
 

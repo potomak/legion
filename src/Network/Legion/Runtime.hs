@@ -110,10 +110,15 @@ runLegionary
 
     (self, nodeState, peers) <- makeNodeState settings startupMode
     rts <- newRuntimeState self peers
+    let
+      messageSource =
+        (joinS =$= CL.map J) `merge`
+        (peerS =$= CL.map P) `merge`
+        (requestSource =$= CL.map R) `merge`
+        (adminS =$= CL.map A)
     runConduit $
-      (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
-        =$= CL.map toMessage
-        =$= messageSink persistence (rts, nodeState)
+      messageSource
+      =$= messageSink persistence (rts, nodeState)
   where
     newRuntimeState :: (Binary e, Binary o, Binary s)
       => Peer
@@ -129,20 +134,6 @@ runLegionary
           self,
           searches = Map.empty
         }
-
-    toMessage
-      :: Either
-          (JoinRequest, JoinResponse -> LIO ())
-          (Either
-            (PeerMessage e o s)
-            (Either
-              (RequestMsg e o)
-              (AdminMessage e o s)))
-      -> RuntimeMessage e o s
-    toMessage (Left m) = J m
-    toMessage (Right (Left m)) = P m
-    toMessage (Right (Right (Left m))) = R m
-    toMessage (Right (Right (Right m))) = A m
 
     {- |
       Turn an LIO-based conduit into an IO-based conduit, so that it
