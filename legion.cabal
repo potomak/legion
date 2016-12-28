@@ -15,7 +15,8 @@ copyright:           2015-2016 Rick Owens
 category:            Concurrency, Network
 stability:           experimental
 build-type:          Simple
--- extra-source-files:
+extra-source-files:
+  README.md
 cabal-version:       >=1.10
 
 source-repository head
