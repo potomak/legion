@@ -62,8 +62,7 @@ runAdmin addr host = do
             . logExceptionsAndContinue logging
 
           resource "/clusterstate" $
-            get $
-              json =<< send chan GetState
+            get $ json =<< send chan GetState
           resource "/propstate/:key" $
             get $ do
               key <- K . read <$> param "key"
