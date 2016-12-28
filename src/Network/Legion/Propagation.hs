@@ -65,13 +65,13 @@ type Time = Maybe UTCTime
   the power state remains consistent with the state of its propagation
   throughout the network.
 -}
-data PropState o s p d r = PropState {
-    powerState :: PowerState o s p d r,
+data PropState o s p e r = PropState {
+    powerState :: PowerState o s p e r,
     peerStates :: Map p PeerStatus,
           self :: p,
            now :: Time
   } deriving (Eq, Show)
-instance (Show o, Show s, Show p, Show d) => ToJSON (PropState o s p d r) where
+instance (Show o, Show s, Show p, Show e) => ToJSON (PropState o s p e r) where
   toJSON PropState {powerState, peerStates, self, now} = object [
       "powerState" .= powerState,
       "peerStates" .= Map.fromList [
@@ -89,25 +89,25 @@ instance (Show o, Show s, Show p, Show d) => ToJSON (PropState o s p d r) where
   it over the network, but we don't want any code outside of this module
   to operate on it.
 -}
-newtype PropPowerState o s p d r = PropPowerState {
-    unPowerState :: PowerState o s p d r
+newtype PropPowerState o s p e r = PropPowerState {
+    unPowerState :: PowerState o s p e r
   } deriving (Show, Binary)
 
 
 {- |
   Retriev the current projected value of the underlying state.
 -}
-ask :: (Event d r s) => PropState o s p d r -> s
+ask :: (Event e r s) => PropState o s p e r -> s
 ask = projectedValue . powerState
 
 
 {- |
   Create a new propagation state based on an existing power state.
 -}
-initProp :: (Event d r s, Ord p)
+initProp :: (Event e r s, Ord p)
   => p
-  -> PropPowerState o s p d r
-  -> PropState o s p d r
+  -> PropPowerState o s p e r
+  -> PropState o s p e r
 initProp self ps =
   let powerState = acknowledge self (unPowerState ps)
   in PropState {
@@ -125,7 +125,7 @@ initProp self ps =
   Return an opaque representation of the power state, for transfer across
   the network, or whatever.
 -}
-getPowerState :: PropState o s p d r -> PropPowerState o s p d r
+getPowerState :: PropState o s p e r -> PropPowerState o s p e r
 getPowerState = PropPowerState . powerState
 
 
@@ -141,7 +141,7 @@ data PeerStatus
 {- |
   Create a new propagation state.
 -}
-new :: (Default s) => o -> p -> Set p -> PropState o s p d r
+new :: (Default s) => o -> p -> Set p -> PropState o s p e r
 new origin self participants =
   PropState {
       powerState = PS.new origin participants,
@@ -155,11 +155,11 @@ new origin self participants =
   Like `merge`, but total. `mergeEither` returns a human readable reason why
   the foreign powerstate can't be merged in the event of an error.
 -}
-mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show d, Event d r s)
+mergeEither :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
   => p
-  -> PropPowerState o s p d r
-  -> PropState o s p d r
-  -> Either String (PropState o s p d r)
+  -> PropPowerState o s p e r
+  -> PropState o s p e r
+  -> Either String (PropState o s p e r)
 mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   let ps = unPowerState kernel
   in case acknowledge self <$> PS.mergeEither ps powerState of
@@ -191,11 +191,11 @@ mergeEither source kernel (prop@PropState {powerState, peerStates, self, now}) =
   Like `merge`, but total. `mergeMaybe` returns `Nothing` if the foreign power
   state can't be merged.
 -}
-mergeMaybe :: (Eq o, Ord p, Show o, Show s, Show p, Show d, Event d r s)
+mergeMaybe :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
   => p
-  -> PropPowerState o s p d r
-  -> PropState o s p d r
-  -> Maybe (PropState o s p d r)
+  -> PropPowerState o s p e r
+  -> PropState o s p e r
+  -> Maybe (PropState o s p e r)
 mergeMaybe source ps prop =
   case mergeEither source ps prop of
     Left _ -> Nothing
@@ -208,11 +208,11 @@ mergeMaybe source ps prop =
   precondition is not met, `error` will be called (making this function
   non-total). Using `mergeMaybe` or `mergeEither` is recommended.
 -}
-merge :: (Eq o, Ord p, Show o, Show s, Show p, Show d, Event d r s)
+merge :: (Eq o, Ord p, Show o, Show s, Show p, Show e, Event e r s)
   => p
-  -> PropPowerState o s p d r
-  -> PropState o s p d r
-  -> PropState o s p d r
+  -> PropPowerState o s p e r
+  -> PropState o s p e r
+  -> PropState o s p e r
 merge source ps prop =
   case mergeEither source ps prop of
     Left err -> error err
@@ -222,19 +222,19 @@ merge source ps prop =
 {- |
   Time moves forward.
 -}
-heartbeat :: UTCTime -> PropState o s p d r -> PropState o s p d r
+heartbeat :: UTCTime -> PropState o s p e r -> PropState o s p e r
 heartbeat newNow prop = prop {now = max (now prop) (Just newNow)}
 
 
 {- |
   Apply an event.
 -}
-event :: (Ord p, Event d r s)
-  => d
-  -> PropState o s p d r
-  -> PropState o s p d r
-event d prop@PropState {self, powerState, now} =
-  let newPowerState = PS.event self d powerState
+event :: (Ord p, Event e r s)
+  => e
+  -> PropState o s p e r
+  -> PropState o s p e r
+event e prop@PropState {self, powerState, now} =
+  let newPowerState = PS.event self e powerState
   in prop {
       powerState = newPowerState,
       peerStates = Map.fromAscList [
@@ -250,8 +250,8 @@ event d prop@PropState {self, powerState, now} =
   state that is applicable after those actions have been taken.
 -}
 actions :: (Eq p)
-  => PropState o s p d r
-  -> (Set p, PropPowerState o s p d r, PropState o s p d r)
+  => PropState o s p e r
+  -> (Set p, PropPowerState o s p e r, PropState o s p e r)
 actions prop@PropState {powerState, peerStates, now} =
     (outOfDatePeers, PropPowerState powerState, newPropState)
   where
@@ -292,10 +292,10 @@ gracePeriod = oneMinute
 {- |
   Allow a participant to join in the distributed nature of the power state.
 -}
-participate :: (Ord p, Event d r s)
+participate :: (Ord p, Event e r s)
   => p
-  -> PropState o s p d r
-  -> PropState o s p d r
+  -> PropState o s p e r
+  -> PropState o s p e r
 participate peer prop@PropState {powerState, now} =
   let newPowerState = PS.participate peer powerState
   in prop {
@@ -310,10 +310,10 @@ participate peer prop@PropState {powerState, now} =
 {- |
   Eject a participant from the power state.
 -}
-disassociate :: (Ord p, Event d r s)
+disassociate :: (Ord p, Event e r s)
   => p
-  -> PropState o s p d r
-  -> PropState o s p d r
+  -> PropState o s p e r
+  -> PropState o s p e r
 disassociate peer prop@PropState {powerState, now} =
   let newPowerState = PS.disassociate peer powerState
   in prop {
@@ -328,14 +328,14 @@ disassociate peer prop@PropState {powerState, now} =
 {- |
   Return the events that are unknown to the specified peer.
 -}
-divergences :: (Ord p) => p -> PropState o s p d r -> Map (StateId p) d
+divergences :: (Ord p) => p -> PropState o s p e r -> Map (StateId p) e
 divergences peer = PS.divergences peer . powerState
 
 
 {- |
   Return self.
 -}
-getSelf :: PropState o s p d r -> p
+getSelf :: PropState o s p e r -> p
 getSelf = self
 
 
@@ -345,7 +345,7 @@ getSelf = self
   for removal, because until the infimum catches up to that projection,
   this peer still has an obligation to participate.
 -}
-participating :: (Ord p) => PropState o s p d r -> Bool
+participating :: (Ord p) => PropState o s p e r -> Bool
 participating PropState{self, powerState} =
   self `member` PS.allParticipants powerState
 
@@ -354,28 +354,28 @@ participating PropState{self, powerState} =
   Get all known participants. This includes participants that are
   projected for removal.
 -}
-allParticipants :: (Ord p) => PropState o s p d r -> Set p
+allParticipants :: (Ord p) => PropState o s p e r -> Set p
 allParticipants = PS.allParticipants . powerState
 
 
 {- |
   Get all of the projected participants.
 -}
-projParticipants :: (Ord p) => PropState o s p d r -> Set p
+projParticipants :: (Ord p) => PropState o s p e r -> Set p
 projParticipants = PS.projParticipants . powerState
 
 
 {- |
   Get the projected value of a PropPowerState.
 -}
-projected :: (Event d r s) => PropPowerState o s p d r -> s
+projected :: (Event e r s) => PropPowerState o s p e r -> s
 projected = PS.projectedValue . unPowerState
 
 
 {- |
   Get the infimum value of the PropPowerState.
 -}
-infimum :: PropPowerState o s p d r -> s
+infimum :: PropPowerState o s p e r -> s
 infimum = PS.infimumValue . unPowerState
 
 
@@ -385,7 +385,7 @@ infimum = PS.infimumValue . unPowerState
   only way more work can happen is if new events are applied, either directly
   or via a merge.
 -}
-idle :: (Ord p) => PropState o s p d r -> Bool
+idle :: (Ord p) => PropState o s p e r -> Bool
 idle PropState {powerState, peerStates} =
   Map.null peerStates && Set.null (divergent powerState)
 
