@@ -10,7 +10,7 @@ module Network.Legion.Basics (
 
 import Prelude hiding (lookup, readFile, writeFile)
 
-import Control.Concurrent.STM (atomically, newTVar, modifyTVar, readTVar,
+import Control.Concurrent.STM (atomically, newTVar, modifyTVar', readTVar,
   TVar)
 import Control.Monad.Trans.Class (lift)
 import Data.Binary (Binary, encode, decode)
@@ -49,10 +49,10 @@ newMemoryPersistence = do
       -> Maybe (PartitionPowerState e o s)
       -> IO ()
     saveState_ cacheT key (Just state) =
-      (atomically . modifyTVar cacheT . insert key) state
+      (atomically . modifyTVar' cacheT . insert key) state
 
     saveState_ cacheT key Nothing =
-      (atomically . modifyTVar cacheT . Map.delete) key
+      (atomically . modifyTVar' cacheT . Map.delete) key
 
     fetchState
       :: TVar (Map PartitionKey (PartitionPowerState e o s))
