@@ -37,7 +37,7 @@ import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.Distribution (ParticipationDefaults, modify, Peer)
 import Network.Legion.KeySet (KeySet, full, unions)
 import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PowerState (Event(apply))
+import Network.Legion.PowerState (Event, apply)
 import Network.Legion.Propagation (PropState, PropPowerState)
 import Network.Socket (SockAddr)
 import qualified Data.Map as Map
@@ -71,9 +71,7 @@ instance ToJSON ClusterState where
     ]
 
 
-{- |
-  A representation of all possible cluster states.
--}
+{- | A representation of all possible cluster states. -}
 newtype ClusterPowerState = ClusterPowerState {
     unPowerState :: PropPowerState UUID ClusterState Peer Update ()
   } deriving (Show, Binary)
@@ -88,9 +86,7 @@ newtype ClusterPropState = ClusterPropState {
   } deriving (Show, ToJSON)
 
 
-{- |
-  The kinds of updates that can be applied to the cluster state.
--}
+{- | The kinds of updates that can be applied to the cluster state. -}
 data Update
   = PeerJoined Peer BSockAddr
   | Participating Peer KeySet
@@ -212,7 +208,9 @@ mergeEither
   :: Peer
   -> ClusterPowerState
   -> ClusterPropState
-  -> Either String (ClusterPropState, KeySet)
+  -> Either
+      String
+      (ClusterPropState, KeySet)
 mergeEither otherPeer (ClusterPowerState otherPS) (ClusterPropState prop) =
   let
     self = P.getSelf prop
@@ -223,7 +221,8 @@ mergeEither otherPeer (ClusterPowerState otherPS) (ClusterPropState prop) =
       ]
   in case P.mergeEither otherPeer otherPS prop of
     Left err -> Left err
-    Right newProp -> Right (ClusterPropState newProp, migrating)
+    Right newProp ->
+      Right (ClusterPropState newProp, migrating)
 
 
 {- |

@@ -9,13 +9,17 @@ module Network.Legion.PowerState (
   Infimum(..),
   Event(..),
   StateId,
+
   new,
+  event,
   merge,
   mergeMaybe,
   mergeEither,
   acknowledge,
+
   participate,
   disassociate,
+
   projectedValue,
   infimumValue,
   infimumParticipants,
@@ -23,7 +27,6 @@ module Network.Legion.PowerState (
   projParticipants,
   divergent,
   divergences,
-  event,
 ) where
 
 import Prelude hiding (null)
@@ -399,7 +402,9 @@ divergences peer PowerState {events} =
   has enough information to derive a new infimum value. In other words,
   this is where garbage collection happens.
 -}
-reduce :: (Event e r s, Ord p) => PowerState o s p e r -> PowerState o s p e r
+reduce :: (Event e r s, Ord p)
+  => PowerState o s p e r
+  -> PowerState o s p e r
 reduce ps@PowerState {
     infimum = infimum@Infimum {participants, stateValue},
     events

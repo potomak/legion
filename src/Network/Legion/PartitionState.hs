@@ -77,7 +77,9 @@ mergeEither :: (Show e, Show s, Event e o s)
   => Peer
   -> PartitionPowerState e o s
   -> PartitionPropState e o s
-  -> Either String (PartitionPropState e o s)
+  -> Either
+      String
+      (PartitionPropState e o s)
 mergeEither peer ps prop =
   PartitionPropState <$>
     P.mergeEither peer (unPowerState ps) (unPropState prop)

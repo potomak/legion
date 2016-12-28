@@ -177,10 +177,3 @@ newPeer :: LIO Peer
 newPeer = Peer <$> getUUID
 
 
--- {- |
---   Trace helper
--- -}
--- t :: (Show a) => String -> a -> a
--- t msg a = trace (msg ++ ": " ++ show a) a
-
-

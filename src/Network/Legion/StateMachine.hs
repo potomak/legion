@@ -126,9 +126,7 @@ instance (Show e, Show s) => ToJSON (NodeState e o s) where
       ]
 
 
-{- |
-  Make a new node state.
--}
+{- | Make a new node state. -}
 newNodeState :: Peer -> ClusterPropState -> NodeState e o s
 newNodeState self cluster =
   NodeState {
@@ -151,7 +149,10 @@ newNodeState self cluster =
   we have to do so using a monad.
 -}
 newtype SM e o s a = SM {
-    unSM :: ReaderT (Persistence e o s) (StateT (NodeState e o s) LIO) a
+    unSM ::
+      ReaderT (Persistence e o s) (
+      StateT (NodeState e o s)
+      LIO) a
   }
   deriving (Functor, Applicative, Monad, MonadLogger, MonadIO)
 
@@ -164,11 +165,18 @@ runSM
   -> NodeState e o s
   -> SM e o s a
   -> LIO (a, NodeState e o s)
-runSM p ns action = runStateT (runReaderT (unSM action) p) ns
+runSM p ns =
+  (`runStateT` ns)
+  . (`runReaderT` p)
+  . unSM
 
 
 {- | Handle a user request. -}
-userRequest :: (Event e o s, Default s, Indexable s)
+userRequest :: (
+      Event e o s,
+      Default s,
+      Indexable s
+    )
   => PartitionKey
   -> e
   -> SM e o s (UserResponse o)
@@ -196,7 +204,13 @@ userRequest key request = SM $ do
   Handle the state transition for a partition merge event. Returns 'Left'
   if there is an error, and 'Right' if everything went fine.
 -}
-partitionMerge :: (Show e, Show s, Event e o s, Default s, Indexable s)
+partitionMerge :: (
+      Show e,
+      Show s,
+      Event e o s,
+      Default s,
+      Indexable s
+    )
   => Peer
   -> PartitionKey
   -> PartitionPowerState e o s
@@ -242,7 +256,8 @@ clusterMerge source foreignCluster = SM . lift $ do
   peer to a partition. This will cause the data to be transfered in the
   normal course of propagation.
 -}
-migrate :: (Default s, Event e o s, Indexable s) => SM e o s ()
+migrate :: (Default s, Event e o s, Indexable s)
+  => SM e o s ()
 migrate = do
     NodeState {migration} <- (SM . lift) get
     persistence <- SM ask
@@ -355,7 +370,9 @@ eject peer = SM . lift $ do
 
 
 {- | Handle a peer join request.  -}
-join :: BSockAddr -> SM e o s (Peer, ClusterPowerState)
+join
+  :: BSockAddr
+  -> SM e o s (Peer, ClusterPowerState)
 join peerAddr = SM $ do
   peer <- lift2 newPeer
   ns@NodeState {cluster} <- lift get
@@ -494,12 +511,7 @@ savePartition key partition = SM $ do
 
 {- | Lift from two levels down in a monad transformation stack. -}
 lift2
-  :: (
-      MonadTrans a,
-      MonadTrans b,
-      Monad m,
-      Monad (b m)
-    )
+  :: (MonadTrans a, MonadTrans b, Monad m, Monad (b m))
   => m r
   -> a (b m) r
 lift2 = lift . lift
