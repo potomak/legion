@@ -20,12 +20,13 @@ module Network.Legion.Runtime (
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Chan (writeChan, newChan, Chan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
-import Control.Monad (void, forever, join, (>=>))
+import Control.Monad (void, forever, join)
 import Control.Monad.Catch (catchAll, try, SomeException, throwM)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (logWarn, logError, logInfo, LoggingT,
   MonadLoggerIO, runLoggingT, askLoggerIO, logDebug)
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State (StateT, runStateT, get, put, modify)
 import Data.Binary (encode, Binary)
 import Data.Conduit (Source, ($$), (=$=), yield, await, awaitForever,
   transPipe, ConduitM, runConduit, Sink)
@@ -37,7 +38,7 @@ import Data.Text (pack)
 import GHC.Generics (Generic)
 import Network.Legion.Admin (runAdmin, AdminMessage(GetState, GetPart,
   Eject))
-import Network.Legion.Application (LegionConstraints, getState, Persistence)
+import Network.Legion.Application (LegionConstraints, Persistence)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Conduit (merge, chanToSink, chanToSource)
@@ -46,19 +47,23 @@ import Network.Legion.Fork (forkC)
 import Network.Legion.Index (IndexRecord(IndexRecord), irTag, irKey,
   SearchTag(SearchTag))
 import Network.Legion.LIO (LIO)
+import Network.Legion.Lift (lift2,  lift3)
 import Network.Legion.PartitionKey (PartitionKey)
+import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.Runtime.ConnectionManager (newConnectionManager,
-  send, ConnectionManager, newPeers)
+  ConnectionManager, newPeers)
 import Network.Legion.Runtime.PeerMessage (PeerMessage(PeerMessage),
   PeerMessagePayload(ForwardRequest, ForwardResponse, ClusterMerge,
-  PartitionMerge, Search, SearchResponse), MessageId, newSequence,
-  nextMessageId)
+  PartitionMerge, Search, SearchResponse, JoinNext, JoinNextResponse),
+  MessageId, newSequence, nextMessageId, JoinNextResponse(Joined,
+  JoinFinished))
 import Network.Legion.Settings (RuntimeSettings(RuntimeSettings,
   adminHost, adminPort, peerBindAddr, joinBindAddr))
 import Network.Legion.StateMachine (partitionMerge, clusterMerge,
-  NodeState, newNodeState, runSM, UserResponse(Forward, Respond),
-  userRequest, heartbeat, rebalance, migrate, propagate, ClusterAction,
-  eject, minimumCompleteServiceSet)
+  newNodeState, UserResponse(Forward, Respond), userRequest, eject,
+  minimumCompleteServiceSet, joinNext, joinNextResponse)
+import Network.Legion.StateMachine.Monad (NodeState, runSM, ClusterAction,
+  SM, popActions)
 import Network.Legion.UUID (getUUID)
 import Network.Socket (Family(AF_INET, AF_INET6, AF_UNIX, AF_CAN),
   SocketOption(ReuseAddr), SocketType(Stream), accept, bind,
@@ -69,7 +74,9 @@ import qualified Data.Conduit.List as CL
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Network.Legion.ClusterState as C
+import qualified Network.Legion.Runtime.ConnectionManager as CM
 import qualified Network.Legion.StateMachine as SM
+import qualified Network.Legion.StateMachine.Monad as SMM
 
 
 {- |
@@ -106,37 +113,38 @@ runLegionary
     peerS <- loggingC =<< startPeerListener settings
     adminS <- loggingC =<< runAdmin adminPort adminHost
     joinS <- loggingC (joinMsgSource settings)
+    loopChan <- lift newChan
 
     (self, nodeState, peers) <- makeNodeState settings startupMode
-    cm <- newConnectionManager peers
-
-    firstMessageId <- newSequence
+    rts <- newRuntimeState self peers (writeChan loopChan)
     let
-      rts = RuntimeState {
+      messageSource = transPipe lift (
+          (joinS =$= CL.map J) `merge`
+          (peerS =$= CL.map P) `merge`
+          (requestSource =$= CL.map R) `merge`
+          (adminS =$= CL.map A) `merge`
+          chanToSource loopChan
+        )
+    void . runRTS persistence nodeState rts . runConduit $
+      messageSource
+      =$= messageSink
+  where
+    newRuntimeState :: (Binary e, Binary o, Binary s)
+      => Peer
+      -> Map Peer BSockAddr
+      -> (RuntimeMessage e o s -> IO ())
+      -> LoggingT IO (RuntimeState e o s)
+    newRuntimeState self peers loop = do
+      cm <- newConnectionManager peers
+      firstMessageId <- newSequence
+      return RuntimeState {
           forwarded = Map.empty,
           nextId = firstMessageId,
           cm,
           self,
-          searches = Map.empty
+          searches = Map.empty,
+          loop
         }
-    runConduit $
-      (joinS `merge` (peerS `merge` (requestSource `merge` adminS)))
-        =$= CL.map toMessage
-        =$= messageSink persistence (rts, nodeState)
-  where
-    toMessage
-      :: Either
-          (JoinRequest, JoinResponse -> LIO ())
-          (Either
-            (PeerMessage e o s)
-            (Either
-              (RequestMsg e o)
-              (AdminMessage e o s)))
-      -> RuntimeMessage e o s
-    toMessage (Left m) = J m
-    toMessage (Right (Left m)) = P m
-    toMessage (Right (Right (Left m))) = R m
-    toMessage (Right (Right (Right m))) = A m
 
     {- |
       Turn an LIO-based conduit into an IO-based conduit, so that it
@@ -163,77 +171,48 @@ instance (Show e) => Show (RequestMsg e o) where
 
 
 messageSink :: (LegionConstraints e o s)
-  => Persistence e o s
-  -> (RuntimeState e o s, NodeState e o s)
-  -> Sink (RuntimeMessage e o s) LIO ()
-messageSink persistence states =
-    await >>= \case
-      Nothing -> return ()
-      Just msg -> do
-        $(logDebug) . pack
-          $ "Receieved: " ++ show msg
-        lift . handleMessage persistence msg
-          >=> lift . updatePeers persistence
-          >=> lift . clusterHousekeeping persistence
-          >=> messageSink persistence
-          $ states
+  => Sink (RuntimeMessage e o s) (RTS e o s) ()
+messageSink = awaitForever (\msg -> do
+    $(logDebug) . pack $ "Receieved: " ++ show msg
+    lift $ do
+      handleMessage msg
+      updatePeers
+      clusterActions
+  )
 
+
+{- | Make progress on outstanding cluster actions. -}
+clusterActions :: RTS e o s ()
+clusterActions =
+    mapM_ clusterAction =<< popActions
+  where
+    {- |
+      Actually perform a cluster action as directed by the state
+      machine.
+    -}
+    clusterAction
+      :: ClusterAction e o s
+      -> RTS e o s ()
+
+    clusterAction (SMM.ClusterMerge peer ps) =
+      void $ send peer (ClusterMerge ps)
+
+    clusterAction (SMM.PartitionMerge peer key ps) =
+      void $ send peer (PartitionMerge key ps)
+
+    clusterAction (SMM.PartitionJoin peer keys) =
+      void $ send peer (JoinNext keys)
+    
 
 {- |
   Make sure the connection manager knows about any new peers that have
   joined the cluster.
 -}
-updatePeers
-  :: Persistence e o s
-  -> (RuntimeState e o s, NodeState e o s)
-  -> LIO (RuntimeState e o s, NodeState e o s)
-updatePeers persistence (rts, ns) = do
-  (peers, ns2) <- runSM persistence ns SM.getPeers
-  newPeers (cm rts) peers
-  return (rts, ns2)
-
-
-{- |
-  Perform any cluster management actions, and update the state
-  appropriately.
--}
-clusterHousekeeping :: (LegionConstraints e o s)
-  => Persistence e o s
-  -> (RuntimeState e o s, NodeState e o s)
-  -> LIO (RuntimeState e o s, NodeState e o s)
-clusterHousekeeping persistence (rts, ns) = do
-    (actions, ns2) <- runSM persistence ns (
-        heartbeat
-        >> rebalance
-        >> migrate
-        >> propagate
-      )
-    rts2 <- foldr (>=>) return (clusterAction <$> actions) rts
-    return (rts2, ns2)
-
-
-{- |
-  Actually perform a cluster action as directed by the state
-  machine.
--}
-clusterAction
-  :: ClusterAction e o s
-  -> RuntimeState e o s
-  -> LIO (RuntimeState e o s)
-
-clusterAction
-    (SM.ClusterMerge peer ps)
-    rts@RuntimeState {self, nextId, cm}
-  = do
-    send cm peer (PeerMessage self nextId (ClusterMerge ps))
-    return rts {nextId = nextMessageId nextId}
-
-clusterAction
-    (SM.PartitionMerge peer key ps)
-    rts@RuntimeState {self, nextId, cm}
-  = do
-    send cm peer (PeerMessage self nextId (PartitionMerge key ps))
-    return rts {nextId = nextMessageId nextId}
+updatePeers :: RTS e o s ()
+updatePeers = do
+  peers <- SM.getPeers
+  RuntimeState {cm} <- lift get
+  lift2 $ newPeers cm peers
 
 
 {- |
@@ -242,149 +221,129 @@ clusterAction
   state and node state.
 -}
 handleMessage :: (LegionConstraints e o s)
-  => Persistence e o s
-  -> RuntimeMessage e o s
-  -> (RuntimeState e o s, NodeState e o s)
-  -> LIO (RuntimeState e o s, NodeState e o s)
+  => RuntimeMessage e o s
+  -> RTS e o s ()
+
+handleMessage {- Join Next Response -}
+    (P (PeerMessage source _ (JoinNextResponse _messageId response)))
+  =
+    joinNextResponse source (toMaybe response)
+  where
+    toMaybe
+      :: JoinNextResponse e o s
+      -> Maybe (PartitionKey, PartitionPowerState e o s)
+    toMaybe (Joined key partition) = Just (key, partition)
+    toMaybe JoinFinished = Nothing
+
+handleMessage {- Join Next -}
+    (P (PeerMessage source messageId (JoinNext askKeys)))
+  =
+    joinNext source askKeys >>= \case
+      Nothing -> void $
+        send source (JoinNextResponse messageId JoinFinished)
+      Just (gotKey, partition) -> void $
+        send source (JoinNextResponse messageId (Joined gotKey partition))
 
 handleMessage {- Partition Merge -}
-    persistence
-    (P (PeerMessage source _ (PartitionMerge key ps)))
-    (rts, ns)
-  = do
-    ((), ns2) <- runSM persistence ns (partitionMerge source key ps)
-    return (rts, ns2)
+    (P (PeerMessage _ _ (PartitionMerge key ps)))
+  =
+    partitionMerge key ps
 
 handleMessage {- Cluster Merge -}
-    persistence
-    (P (PeerMessage source _ (ClusterMerge cs)))
-    (rts, ns)
-  = do
-    ((), ns2) <- runSM persistence ns (clusterMerge source cs)
-    return (rts, ns2)
+    (P (PeerMessage _ _ (ClusterMerge cs)))
+  =
+    clusterMerge cs
 
 handleMessage {- Forward Request -}
-    persistence
     (P (msg@(PeerMessage source mid (ForwardRequest key request))))
-    (rts@RuntimeState {nextId, cm, self}, ns)
   = do
-    (output, ns2) <- runSM persistence ns (userRequest key request)
+    output <- userRequest key request
     case output of
-      Respond response -> do
-        send cm source (
-            PeerMessage self nextId (ForwardResponse mid response)
-          )
-        return (rts {nextId = nextMessageId nextId}, ns2)
-      Forward peer -> do
-        send cm peer msg
-        return (rts {nextId = nextMessageId nextId}, ns2)
+      Respond response -> void $ send source (ForwardResponse mid response)
+      Forward peer -> forward peer msg
 
 handleMessage {- Forward Response -}
-    _legionary
     (msg@(P (PeerMessage _ _ (ForwardResponse mid response))))
-    (rts, ns)
-  =
+  = do
+    rts <- lift get
     case lookupDelete mid (forwarded rts) of
       (Nothing, fwd) -> do
         $(logWarn) . pack $ "Unsolicited ForwardResponse: " ++ show msg
-        return (rts {forwarded = fwd}, ns)
+        (lift . put) rts {forwarded = fwd}
       (Just respond, fwd) -> do
-        respond response
-        return (rts {forwarded = fwd}, ns)
+        lift2 $ respond response
+        (lift . put) rts {forwarded = fwd}
 
 handleMessage {- User Request -}
-    persistence
     (R (Request key request respond))
-    (rts@RuntimeState {self, cm, nextId, forwarded}, ns)
   = do
-    (output, ns2) <- runSM persistence ns (userRequest key request)
+    output <- userRequest key request
     case output of
-      Respond response -> do
-        lift (respond response)
-        return (rts, ns2)
+      Respond response -> lift3 (respond response)
       Forward peer -> do
-        send cm peer (
-            PeerMessage self nextId (ForwardRequest key request)
-          )
-        return (
-            rts {
-              forwarded = Map.insert nextId (lift . respond) forwarded,
-              nextId = nextMessageId nextId
-            },
-            ns2
-          )
+        messageId <- send peer (ForwardRequest key request)
+        (lift . modify) $ \rts@RuntimeState {forwarded} -> rts {
+            forwarded = Map.insert messageId (lift . respond) forwarded
+          }
 
 handleMessage {- Search Dispatch -}
     {-
       This is where we send out search request to all the appropriate
       nodes in the cluster.
     -}
-    persistence
     (R (SearchDispatch searchTag respond))
-    (rts@RuntimeState {cm, self, searches}, ns)
   =
-    case Map.lookup searchTag searches of
+    Map.lookup searchTag . searches <$> lift get >>= \case
       Nothing -> do
         {-
           No identical search is currently being executed, kick off a
           new one.
         -}
-        (mcss, ns2) <- runSM persistence ns minimumCompleteServiceSet 
-        rts2 <- foldr (>=>) return (sendOne <$> Set.toList mcss) rts
-        return (
-            rts2 {
-              searches = Map.insert
-                searchTag
-                (mcss, Nothing, [lift . respond])
-                searches
-            },
-            ns2
-          )
-      Just (peers, best, responders) ->
+        mcss <- minimumCompleteServiceSet
+        mapM_ sendOne (Set.toList mcss)
+        rts@RuntimeState {searches} <- lift get
+        (lift . put) rts {
+            searches = Map.insert
+              searchTag
+              (mcss, Nothing, [lift . respond])
+              searches
+          }
+      Just (peers, best, responders) -> do
         {-
           A search for this tag is already in progress, just add the
           responder to the responder list.
         -}
-        return (
-            rts {
-              searches = Map.insert
-                searchTag
-                (peers, best, (lift . respond):responders)
-                searches
-            },
-            ns
-          )
+        rts@RuntimeState {searches} <- lift get
+        (lift . put) rts {
+            searches = Map.insert
+              searchTag
+              (peers, best, (lift . respond):responders)
+              searches
+          }
   where
-    sendOne :: Peer -> RuntimeState e o s -> LIO (RuntimeState e o s)
-    sendOne peer r@RuntimeState {nextId} = do
-      send cm peer (PeerMessage self nextId (Search searchTag))
-      return r {nextId = nextMessageId nextId}
+    sendOne :: Peer -> RTS e o s ()
+    sendOne peer =
+      void $ send peer (Search searchTag)
 
 handleMessage {- Search Execution -}
     {- This is where we handle local search execution. -}
-    persistence
     (P (PeerMessage source _ (Search searchTag)))
-    (rts@RuntimeState {nextId, cm, self}, ns)
   = do
-    (output, ns2) <- runSM persistence ns (SM.search searchTag) 
-    send cm source (PeerMessage self nextId (SearchResponse searchTag output))
-    return (rts {nextId = nextMessageId nextId}, ns2)
+    output <- SM.search searchTag 
+    void $ send source (SearchResponse searchTag output)
 
 handleMessage {- Search Response -}
     {-
       This is where we gather all the responses from the various peers
       to which we dispatched search requests.
     -}
-    _legionary
     (msg@(P (PeerMessage source _ (SearchResponse searchTag response))))
-    (rts@RuntimeState {searches}, ns)
   =
     {- TODO: see if this function can't be made more elegant. -}
-    case Map.lookup searchTag searches of
-      Nothing -> do
+    Map.lookup searchTag . searches <$> lift get >>= \case
+      Nothing ->
         {- There is no search happening. -}
         $(logWarn) . pack $ "Unsolicited SearchResponse: " ++ show msg
-        return (rts, ns)
       Just (peers, best, responders) ->
         if source `Set.member` peers
           then
@@ -395,29 +354,24 @@ handleMessage {- Search Response -}
                   All peers have responded, go ahead and respond to
                   the client.
                 -}
-                mapM_ ($ bestOf best response) responders
-                return (
-                    rts {searches = Map.delete searchTag searches},
-                    ns
-                  )
-              else
+                lift2 $ mapM_ ($ bestOf best response) responders
+                rts@RuntimeState {searches} <- lift get
+                (lift . put) rts {searches = Map.delete searchTag searches}
+              else do
                 {- We are still waiting on some outstanding requests. -}
-                return (
-                    rts {
-                      searches = Map.insert
-                        searchTag
-                        (peers2, bestOf best response, responders)
-                        searches
-                    },
-                    ns
-                  )
-          else do
+                rts@RuntimeState {searches} <- lift get
+                (lift . put) rts {
+                    searches = Map.insert
+                      searchTag
+                      (peers2, bestOf best response, responders)
+                      searches
+                  }
+          else
             {-
               There is a search happening, but the peer that responded
               is not part of it.
             -}
             $(logWarn) . pack $ "Unsolicited SearchResponse: " ++ show msg
-            return (rts, ns)
   where
     {- |
       Figure out which index record returned to us by the various peers
@@ -431,33 +385,23 @@ handleMessage {- Search Response -}
     bestOf a Nothing = a
 
 handleMessage {- Join Request -}
-    persistence
     (J (JoinRequest addy, respond))
-    (rts, ns)
   = do
-    ((peer, cluster), ns2) <- runSM persistence ns (SM.join addy)
-    respond (JoinOk peer cluster)
-    return (rts, ns2)
+    (peer, cluster) <- SM.join addy
+    lift2 $ respond (JoinOk peer cluster)
 
 handleMessage {- Admin Get State -}
-    _legionary
     (A (GetState respond))
-    (rts, ns)
-  =
-    respond ns >> return (rts, ns)
+  = 
+    lift2 . respond =<< SMM.getNodeState
 
 handleMessage {- Admin Get Partition -}
-    persistence
     (A (GetPart key respond))
-    (rts, ns)
-  = do
-    respond =<< lift (getState persistence key)
-    return (rts, ns)
+  =
+    lift2 . respond =<< SM.getPartition key
 
 handleMessage {- Admin Eject Peer -}
-    persistence
     (A (Eject peer respond))
-    (rts, ns)
   = do
     {-
       TODO: we should attempt to notify the ejected peer that it has
@@ -482,9 +426,8 @@ handleMessage {- Admin Eject Peer -}
       "next state id" for a peer were global across all power states
       instead of local to each power state?
     -}
-    ((), ns2) <- runSM persistence ns (eject peer)
-    respond ()
-    return (rts, ns2)
+    eject peer
+    lift2 $ respond ()
 
 
 {- | This defines the various ways a node can be spun up. -}
@@ -592,9 +535,8 @@ makeNodeState RuntimeSettings {peerBindAddr} (JoinCluster addr) = do
       shutdown or crash.
     -}
     $(logInfo) "Trying to join an existing cluster."
-    (self, clusterPS) <- joinCluster (JoinRequest (BSockAddr peerBindAddr))
+    (self, cluster) <- joinCluster (JoinRequest (BSockAddr peerBindAddr))
     let
-      cluster = C.initProp self clusterPS
       nodeState = newNodeState self cluster
     return (self, nodeState, C.getPeers cluster)
   where
@@ -814,7 +756,9 @@ data RuntimeState e o s = RuntimeState {
            cm :: ConnectionManager e o s,
      searches :: Map
                   SearchTag
-                  (Set Peer, Maybe IndexRecord, [Maybe IndexRecord -> LIO ()])
+                  (Set Peer, Maybe IndexRecord, [Maybe IndexRecord -> LIO ()]),
+         loop :: RuntimeMessage e o s -> IO ()
+                 {- ^ A way to send messages back into the message handler. -}
   }
 
 
@@ -835,5 +779,46 @@ instance Binary JoinResponse
 {- | Lookup a key from a map, and also delete the key if it exists. -}
 lookupDelete :: (Ord k) => k -> Map k v -> (Maybe v, Map k v)
 lookupDelete = Map.updateLookupWithKey (const (const Nothing))
+
+
+{- | The runtime monad.  -}
+type RTS e o s =
+  SM e o s (
+  StateT (RuntimeState e o s)
+  LIO)
+
+
+{- | Shorthand for running the RTS monad. -}
+runRTS
+  :: Persistence e o s
+  -> NodeState e o s
+  -> RuntimeState e o s
+  -> RTS e o s a
+  -> LIO (a, NodeState e o s, [ClusterAction e o s], RuntimeState e o s)
+runRTS persistence ns rts =
+    fmap flatten
+    . (`runStateT` rts)
+    . runSM persistence ns
+  where
+    flatten ((a, b, c), d) = (a, b, c, d)
+
+
+{- |
+  Send a peer message in the RTS monad, automatically taking care of
+  necessary state updates.
+-}
+send :: Peer -> PeerMessagePayload e o s -> RTS e o s MessageId
+send target payload = do
+  rts@RuntimeState {cm, self, nextId} <- lift get
+  (lift . put) rts {nextId = nextMessageId nextId}
+  lift2 $ CM.send cm target (PeerMessage self nextId payload)
+  return nextId
+
+
+{- | Forward an existing message to another peer. -}
+forward :: Peer -> PeerMessage e o s -> RTS e o s ()
+forward target message = do
+  RuntimeState {cm} <- lift get
+  lift2 $ CM.send cm target message
 
 

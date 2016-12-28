@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                legion
-version:             0.7.0.0
+version:             0.8.0.0
 synopsis:            Distributed, stateful, homogeneous microservice framework.
 description:         Legion is a framework for writing distributed,
                      homogeneous, stateful microservices in Haskell.
@@ -37,15 +37,17 @@ library
     Network.Legion.Index
     Network.Legion.KeySet
     Network.Legion.LIO
+    Network.Legion.Lift
     Network.Legion.PartitionKey
     Network.Legion.PartitionState
     Network.Legion.PowerState
-    Network.Legion.Propagation
+    Network.Legion.PowerState.Monad
     Network.Legion.Runtime
     Network.Legion.Runtime.ConnectionManager
     Network.Legion.Runtime.PeerMessage
     Network.Legion.Settings
     Network.Legion.StateMachine
+    Network.Legion.StateMachine.Monad
     Network.Legion.UUID
     Paths_legion
   -- other-extensions:
@@ -58,7 +60,6 @@ library
     binary-conduit     >= 1.2.3    && < 1.3,
     bytestring         >= 0.10.4.0 && < 0.11,
     canteven-http      >= 0.1.1.1  && < 0.2,
-    canteven-log       >= 1.0.0.0  && < 2.1,
     conduit            >= 1.2.4    && < 1.3,
     conduit-extra      >= 1.1.9    && < 1.2,
     containers         >= 0.5.5.1  && < 0.6,
@@ -73,7 +74,6 @@ library
     scotty-resource    >= 0.1      && < 0.3,
     stm                >= 2.4.4.1  && < 2.5,
     text               >= 1.2.2.0  && < 1.3,
-    time               >= 1.4.2    && < 1.7,
     transformers       >= 0.3.0.0  && < 0.6,
     unix               >= 2.7      && < 2.8,
     uuid               >= 1.3.11   && < 1.4,
