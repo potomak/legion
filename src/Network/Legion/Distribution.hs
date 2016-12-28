@@ -18,6 +18,7 @@ module Network.Legion.Distribution (
 
 import Prelude hiding (null)
 
+import Control.Monad.IO.Class (MonadIO)
 import Data.Aeson (ToJSON, toJSON, object, (.=))
 import Data.Binary (Binary)
 import Data.Function (on)
@@ -27,7 +28,6 @@ import Data.Text (pack)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
 import Network.Legion.KeySet (KeySet, member, (\\), null)
-import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.UUID (getUUID)
 import Text.Read (readPrec)
@@ -173,7 +173,7 @@ instance Binary RebalanceAction
 {- |
   Create a new peer.
 -}
-newPeer :: LIO Peer
+newPeer :: (MonadIO m) => m Peer
 newPeer = Peer <$> getUUID
 
 
