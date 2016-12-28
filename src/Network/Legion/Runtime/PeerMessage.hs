@@ -7,6 +7,7 @@ module Network.Legion.Runtime.PeerMessage (
   PeerMessage(..),
   PeerMessagePayload(..),
   MessageId,
+  JoinNextResponse(..),
   newSequence,
   nextMessageId,
 ) where
@@ -19,6 +20,7 @@ import GHC.Generics (Generic)
 import Network.Legion.ClusterState (ClusterPowerState)
 import Network.Legion.Distribution (Peer)
 import Network.Legion.Index (SearchTag, IndexRecord)
+import Network.Legion.KeySet (KeySet)
 import Network.Legion.LIO (LIO)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState)
@@ -52,12 +54,22 @@ data PeerMessagePayload e o s
   | ClusterMerge ClusterPowerState
   | Search SearchTag
   | SearchResponse SearchTag (Maybe IndexRecord)
+  | JoinNext KeySet
+  | JoinNextResponse MessageId (JoinNextResponse e o s)
   deriving (Generic, Show)
 instance (Binary e, Binary o, Binary s) => Binary (PeerMessagePayload e o s)
 
 
 data MessageId = M UUID Word64 deriving (Generic, Show, Eq, Ord)
 instance Binary MessageId
+
+
+{- | The response to a 'JoinNext' message. -}
+data JoinNextResponse e o s
+  = Joined PartitionKey (PartitionPowerState e o s)
+  | JoinFinished
+  deriving (Show, Generic)
+instance (Binary e, Binary s) => Binary (JoinNextResponse e o s)
 
 
 {- |

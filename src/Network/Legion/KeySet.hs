@@ -16,7 +16,8 @@ module Network.Legion.KeySet (
   empty,
   null,
   fromRange,
-  full
+  full,
+  minView,
 ) where
 
 import Prelude hiding (take, null)
@@ -24,7 +25,8 @@ import Prelude hiding (take, null)
 import Data.Binary (Binary(put, get))
 import Data.Ranged (Range(Range), RSet, rSetEmpty, Boundary(BoundaryBelow,
   BoundaryAbove, BoundaryAboveAll, BoundaryBelowAll), makeRangedSet,
-  rSetHas, rSetUnion, (-!-), unsafeRangedSet, rSetRanges)
+  rSetHas, rSetUnion, (-!-), unsafeRangedSet, rSetRanges, rangeLower,
+  rSingleton)
 import GHC.Generics (Generic)
 import Network.Legion.PartitionKey (PartitionKey(K, unKey))
 
@@ -34,7 +36,13 @@ import Network.Legion.PartitionKey (PartitionKey(K, unKey))
   semantics, but unlike `Data.Set.Set`, it performs well with dense sets
   because it only stores the set of continuous ranges in memory.
 -}
-newtype KeySet = S {unS :: RSet PartitionKey} deriving (Show, Eq)
+newtype KeySet = S {unS :: RSet PartitionKey} deriving (Eq)
+
+{- |
+  Make a less cluttered 'Show' instance by removing all the newtype rapping.
+-}
+instance Show KeySet where
+  showsPrec p = showsPrec p . rSetRanges . unS
 
 instance Binary KeySet where
   put =
@@ -201,5 +209,21 @@ take num set =
       Range (BoundaryAbove a) (BoundaryAbove (fromI (toI a + n)))
     takeRange n (Range (BoundaryBelow a) _) =
       Range (BoundaryBelow a) (BoundaryBelow (fromI (toI a + n)))
+
+
+{- |
+  Return the minimum key in the set, along with the set stripped of
+  that key.
+-}
+minView :: KeySet -> Maybe (PartitionKey, KeySet)
+minView (S rset) =
+  case rSetRanges rset of
+    [] -> Nothing
+    r:_ ->
+      case rangeLower r of
+        BoundaryAbove key -> Just (succ key, S (rset -!- rSingleton (succ key)))
+        BoundaryBelow key -> Just (key, S (rset -!- rSingleton key))
+        BoundaryAboveAll -> Nothing
+        BoundaryBelowAll -> Just (minBound, S (rset -!- rSingleton minBound))
 
 

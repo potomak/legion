@@ -32,7 +32,6 @@ module Network.Legion.PowerState (
   allParticipants,
   projParticipants,
   divergent,
-  divergences,
 ) where
 
 import Prelude hiding (null)
@@ -64,7 +63,7 @@ data PowerState o s p e r = PowerState {
      events :: Map (StateId p) (Delta p e, Set p)
   } deriving (Generic, Show, Eq)
 instance (Binary o, Binary s, Binary p, Binary e) => Binary (PowerState o s p e r)
-instance (Show o, Show s, Show p, Show e) => ToJSON (PowerState o s p e r) where
+instance (Show o, ToJSON s, Show p, Show e) => ToJSON (PowerState o s p e r) where
   toJSON PowerState {origin, infimum, events} = object [
       "origin" .= show origin,
       "infimum" .= infimum,
@@ -89,11 +88,11 @@ instance (Eq p) => Eq (Infimum s p) where
   Infimum s1 _ _ == Infimum s2 _ _ = s1 == s2
 instance (Ord p) => Ord (Infimum s p) where
   compare (Infimum s1 _ _) (Infimum s2 _ _) = compare s1 s2
-instance (Show s, Show p) => ToJSON (Infimum s p) where
+instance (ToJSON s, Show p) => ToJSON (Infimum s p) where
   toJSON Infimum {stateId, participants, stateValue} = object [
       "stateId" .= show stateId,
       "participants" .= Set.map show participants,
-      "stateValue" .= show stateValue
+      "stateValue" .= stateValue
     ]
 
 
@@ -291,15 +290,19 @@ disassociate p ps@PowerState {events} = ps {
 
 {- |
   Introduce a change to the PowerState on behalf of the participant.
+  Return the new powerstate along with the projected output of the event.
 -}
-event :: (Ord p)
+event :: (Ord p, Event e r s)
   => p
   -> e
   -> PowerState o s p e r
-  -> PowerState o s p e r
-event p e ps@PowerState {events} = ps {
-    events = Map.insert (nextId p ps) (Event e, Set.empty) events
-  }
+  -> (r, PowerState o s p e r)
+event p e ps@PowerState {events} = (
+    fst (apply e (projectedValue ps)),
+    ps {
+        events = Map.insert (nextId p ps) (Event e, Set.empty) events
+      }
+  )
 
 
 {- |
@@ -403,15 +406,22 @@ divergent PowerState {
 
 
 {- |
-  Return the events that are unknown to the specified peer.
+  Return all divergent events, along with the set of peers for which we
+  are expecting an acknowledgement of the event.
 -}
-divergences :: (Ord p) => p -> PowerState o s p e r -> Map (StateId p) e
-divergences peer PowerState {events} =
-  fromAscList [
-    (sid, e)
-    | (sid, (Event e, p)) <- toAscList events
-    , not (peer `member` p)
-  ]
+_divergences :: (Ord p) => PowerState o s p e r -> Map (StateId p) (e, Set p)
+_divergences PowerState {events, infimum} =
+    go (participants infimum) (Map.toAscList events)
+  where
+    go :: (Ord p)
+      => Set p
+      -> [(StateId p, (Delta p e, Set p))]
+      -> Map (StateId p) (e, Set p)
+    go _ [] = Map.empty
+    go ps ((sid, (Event e, p)):moreEvents) =
+      Map.insert sid (e, ps \\ p) (go ps moreEvents)
+    go ps ((_, (Join p, _)):moreEvents) = go (Set.insert p ps) moreEvents
+    go ps ((_, (UnJoin p, _)):moreEvents) = go (Set.delete p ps) moreEvents
 
 
 {- |

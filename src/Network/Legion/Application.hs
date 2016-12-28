@@ -8,6 +8,7 @@ module Network.Legion.Application (
   Persistence(..),
 ) where
 
+import Data.Aeson (ToJSON)
 import Data.Binary (Binary)
 import Data.Conduit (Source)
 import Data.Default.Class (Default)
@@ -21,13 +22,16 @@ import Network.Legion.PowerState (Event)
   constraints
 
   > (
-  >   Event e o s, Default s, Binary e, Binary o, Binary s, Show e,
-  >   Show o, Show s, Eq e
+  >   Binary e, Binary o, Binary s, Default s, Eq e, Event e o s, Indexable s,
+  >   Show e, Show o, Show s, ToJSON s
   > )
+
+  The @ToJSON s@ requirement is strictly for servicing the admin web
+  endpoints.
 -}
 type LegionConstraints e o s = (
-    Event e o s, Indexable s, Default s, Binary e, Binary o, Binary s,
-    Show e, Show o, Show s, Eq e
+    Binary e, Binary o, Binary s, Default s, Eq e, Event e o s, Indexable s,
+    Show e, Show o, Show s, ToJSON s
   )
 
 
@@ -40,12 +44,13 @@ data Persistence e o s = Persistence {
      getState :: PartitionKey -> IO (Maybe (PartitionPowerState e o s)),
     saveState :: PartitionKey -> Maybe (PartitionPowerState e o s) -> IO (),
          list :: Source IO (PartitionKey, PartitionPowerState e o s)
-      {- ^
-        List all the keys known to the persistence layer. It is important
-        that the implementation do the right thing with regard to
-        `Data.Conduit.addCleanup`, because there are cases where the
-        conduit is terminated without reading the entire list.
-      -}
+                 {- ^
+                   List all the keys known to the persistence layer. It is
+                   important that the implementation do the right thing
+                   with regard to `Data.Conduit.addCleanup`, because
+                   there are cases where the conduit is terminated
+                   without reading the entire list.
+                 -}
   }
 
 

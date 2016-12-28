@@ -19,7 +19,7 @@ import Control.Monad.Trans.Class (lift)
 import Data.Conduit (Source)
 import Data.Default.Class (def)
 import Data.Text.Encoding (encodeUtf8)
-import Data.Text.Lazy (Text, pack)
+import Data.Text.Lazy (Text)
 import Data.Version (showVersion)
 import Network.HTTP.Types (notFound404)
 import Network.Legion.Application (LegionConstraints)
@@ -38,8 +38,8 @@ import Network.Wai.Middleware.StripHeaders (stripHeader)
 import Paths_legion (version)
 import Text.Read (readMaybe)
 import Web.Scotty.Resource.Trans (resource, get, delete)
-import Web.Scotty.Trans (Options, scottyOptsT, settings, ScottyT, text,
-  ActionT, param, middleware, status)
+import Web.Scotty.Trans (Options, scottyOptsT, settings, ScottyT, ActionT,
+  param, middleware, status, json)
 import qualified Data.Text as T
 
 {- |
@@ -62,14 +62,12 @@ runAdmin addr host = do
             . logExceptionsAndContinue logging
 
           resource "/clusterstate" $
-            get $ do
-              val <- send chan GetState
-              text (pack (show val))
+            get $
+              json =<< send chan GetState
           resource "/propstate/:key" $
             get $ do
               key <- K . read <$> param "key"
-              val <- send chan (GetPart key)
-              text (pack (show val))
+              json =<< send chan (GetPart key)
           resource "/peers/:peer" $
             delete $
               readMaybe <$> param "peer" >>= \case
@@ -130,7 +128,7 @@ setServer = addServerHeader . stripServerHeader
 -}
 data AdminMessage e o s
   = GetState (NodeState e o s -> LIO ())
-  | GetPart PartitionKey (Maybe (PartitionPowerState e o s) -> LIO ())
+  | GetPart PartitionKey (PartitionPowerState e o s -> LIO ())
   | Eject Peer (() -> LIO ())
 
 instance Show (AdminMessage e o s) where

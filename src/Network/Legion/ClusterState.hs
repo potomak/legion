@@ -1,49 +1,54 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 {- |
   This module contains the data types related to the distributed cluster state.
 -}
 module Network.Legion.ClusterState (
   ClusterState,
   ClusterPowerState,
-  ClusterPropState,
-  claimParticipation,
+  ClusterPowerStateT,
+  RebalanceOrd,
   new,
-  initProp,
-  getPowerState,
   getPeers,
-  findPartition,
+  findRoute,
+  findOwners,
   getDistribution,
   joinCluster,
+  finishRebalance,
   eject,
-  mergeEither,
-  actions,
-  allParticipants,
-  heartbeat,
+  nextAction,
 ) where
 
-import Data.Aeson (ToJSON, toJSON, object, (.=))
+import Control.Exception (throw)
+import Data.Aeson (ToJSON, toJSON, object, (.=), encode)
 import Data.Binary (Binary)
 import Data.Default.Class (Default(def))
+import Data.Functor.Identity (runIdentity)
 import Data.Map (Map)
 import Data.Set (Set)
-import Data.Time.Clock (UTCTime)
+import Data.Text.Encoding (decodeUtf8)
 import Data.UUID (UUID)
+import Data.Word (Word64)
 import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
-import Network.Legion.Distribution (ParticipationDefaults, modify, Peer)
-import Network.Legion.KeySet (KeySet, full, unions)
+import Network.Legion.Distribution (ParticipationDefaults,
+  Peer, rebalanceAction, RebalanceAction(NoAction))
 import Network.Legion.PartitionKey (PartitionKey)
-import Network.Legion.PowerState (Event, apply, StateId, DifferentOrigins)
-import Network.Legion.Propagation (PropState, PropPowerState)
+import Network.Legion.PowerState (Event, apply, PowerState)
+import Network.Legion.PowerState.Monad (PowerStateT, runPowerStateT)
 import Network.Socket (SockAddr)
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import qualified Network.Legion.Distribution as D
-import qualified Network.Legion.Propagation as P
+import qualified Network.Legion.PowerState as PS
+import qualified Network.Legion.PowerState.Monad as PM
 
 
 {- |
@@ -52,14 +57,18 @@ import qualified Network.Legion.Propagation as P
 -}
 data ClusterState = ClusterState {
     distribution :: ParticipationDefaults,
-           peers :: Map Peer BSockAddr
+           peers :: Map Peer BSockAddr,
+         updates :: [ClusterChange],
+    rebalanceOrd :: RebalanceOrd
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 instance Binary ClusterState
 instance Default ClusterState where
   def = ClusterState {
       distribution = D.empty,
-             peers = Map.empty
+             peers = Map.empty,
+           updates = [],
+      rebalanceOrd = minBound
     }
 instance ToJSON ClusterState where
   toJSON ClusterState {distribution, peers} = object [
@@ -69,184 +78,150 @@ instance ToJSON ClusterState where
           | (p, a) <- Map.toList peers
         ]
     ]
+instance Show ClusterState where
+  show = T.unpack . decodeUtf8 . LBS.toStrict . encode
 
 
 {- | A representation of all possible cluster states. -}
-newtype ClusterPowerState = ClusterPowerState {
-    unPowerState :: PropPowerState UUID ClusterState Peer Update ()
-  } deriving (Show, Binary)
+type ClusterPowerState =
+  PowerState UUID ClusterState Peer Update ()
 
 
-{- |
-  A reification of `PropState`, representing the propagation state of the
-  cluster state.
--}
-newtype ClusterPropState = ClusterPropState {
-    unPropState :: PropState UUID ClusterState Peer Update ()
-  } deriving (Show, ToJSON)
+{- | A convenient alias for the cluster power state monad transformer. -}
+type ClusterPowerStateT =
+  PowerStateT UUID ClusterState Peer Update ()
+
+
+{- | The type of rebalancing action ordinal. -}
+newtype RebalanceOrd = RebalanceOrd Word64 
+  deriving (Generic, Show, Enum, Bounded, Eq, Ord)
+instance Binary RebalanceOrd
 
 
 {- | The kinds of updates that can be applied to the cluster state. -}
 data Update
-  = PeerJoined Peer BSockAddr
-  | Participating Peer KeySet
-  | PeerEjected Peer
-  deriving (Show, Generic)
+  = Change ClusterChange
+  | Complete
+  deriving (Show, Generic, Eq)
 instance Binary Update
 instance Event Update () ClusterState where
-  apply (PeerJoined peer addr) cs@ClusterState {peers} =
-    ((), cs {peers = Map.insert peer addr peers})
-  apply (Participating peer ks) cs@ClusterState {distribution} =
-    ((), cs {distribution = modify (Set.insert peer) ks distribution})
-  apply (PeerEjected peer) cs@ClusterState {distribution, peers} =
-    ((), cs {
-        distribution = modify (Set.delete peer) full distribution,
-        peers = Map.delete peer peers
-      })
+  apply update cs@ClusterState {peers, updates, distribution, rebalanceOrd} =
+    ((),) . popUpdate $ case update of
+      Change change -> cs {updates = updates ++ [change]}
+      Complete -> cs {
+          distribution =
+            snd (rebalanceAction (Map.keysSet peers) distribution),
+          rebalanceOrd =
+            succ rebalanceOrd
+        }
 
 
 {- |
-  Helper function, for easily claiming participation in a key set.
+  Helper for 'instance Event Update () ClusterState'. Applies updates
+  from the update queue until an uncompleted rebalance action prevents
+  further progress, and returns the resulting cluster state.
 -}
-claimParticipation
-  :: Peer
-  -> KeySet
-  -> ClusterPropState
-  -> ClusterPropState
-claimParticipation peer ks =
-  ClusterPropState
-  . P.event (Participating peer ks)
-  . unPropState
+popUpdate :: ClusterState -> ClusterState
+popUpdate cs@ClusterState {updates, distribution, peers} =
+  case (updates, rebalanceAction (Map.keysSet peers) distribution) of
+    (u:moreUpdates, (NoAction, _)) -> popUpdate cs {
+        peers = case u of
+          PeerJoined peer addr -> Map.insert peer addr peers
+          PeerEjected peer -> Map.delete peer peers,
+        updates = moreUpdates
+      }
+    _ -> cs
+
+
+{- | This type describes how a cluster topology can change. -}
+data ClusterChange
+  = PeerJoined Peer BSockAddr
+  | PeerEjected Peer
+  deriving (Show, Generic, Eq)
+instance Binary ClusterChange
 
 
 {- |
   Create the cluster state appropriate for a brand-new cluster.
 -}
-new :: UUID -> Peer -> SockAddr -> ClusterPropState
+new :: UUID -> Peer -> SockAddr -> ClusterPowerState
 new clusterId self addy =
-  claimParticipation self full
-  . ClusterPropState
-  . P.event (PeerJoined self (BSockAddr addy))
-  $ P.new clusterId self (Set.singleton self)
+  runIdentity $ runPowerStateT self (PS.new clusterId (Set.singleton self)) (do
+      PM.event (Change (PeerJoined self (BSockAddr addy)))
+      PM.event Complete
+      PM.acknowledge
+    ) >>= \case
+      Left err -> throw err
+      Right ((), _, cluster, _) -> return cluster
 
 
-{- |
-  Initialize a `ClusterPropState` based on the initial underlying cluster power
-  state.
--}
-initProp :: Peer -> ClusterPowerState -> ClusterPropState
-initProp self = ClusterPropState . P.initProp self . unPowerState
-
-
-{- |
-  Return an opaque representation of the underling power state, for transfer
-  across the network, or whatever.
--}
-getPowerState :: ClusterPropState -> ClusterPowerState
-getPowerState = ClusterPowerState . P.getPowerState . unPropState
-
-
-{- |
-  Get the cluster peers.
--}
-getPeers :: ClusterPropState -> Map Peer BSockAddr
-getPeers = peers . P.ask . unPropState
+{- | Get the cluster peers. -}
+getPeers :: ClusterPowerState -> Map Peer BSockAddr
+getPeers = peers . PS.projectedValue
 
 
 {- |
   get the cluster distribution.
 -}
-getDistribution :: ClusterPropState -> ParticipationDefaults
-getDistribution = distribution . P.ask . unPropState
+getDistribution :: ClusterPowerState -> ParticipationDefaults
+getDistribution = distribution . PS.projectedValue
 
 
 {- |
-  Find the nodes that own a given partition.
+  Find the nodes to which a given request might be routed. This might be
+  different from `findOwners` when a cluster rebalancing is taking place.
 -}
-findPartition :: PartitionKey -> ClusterPropState -> Set Peer
-findPartition key =
-  D.findPartition key . distribution . P.ask . unPropState
+findRoute :: PartitionKey -> ClusterPowerState -> Set Peer
+findRoute key =
+  D.findPartition key . distribution . PS.projectedValue
 
 
 {- |
-  Allow a new peer to join the cluster.
+  Find the nodes which own a particular partition. This is used for
+  primarily for initializing a new partition, and may be different than
+  `findRoute` when a cluster rebalancing is happening.
 -}
-joinCluster
-  :: Peer
+findOwners :: PartitionKey -> ClusterPowerState -> Set Peer
+findOwners key cluster =
+  let ClusterState {distribution, peers} = PS.projectedValue cluster
+  in
+    D.findPartition
+      key
+      (snd (rebalanceAction (Map.keysSet peers) distribution))
+
+
+{- | Allow a new peer to join the cluster. -}
+joinCluster :: (Monad m)
+  => Peer
     {- ^ The peer that is joining. -}
   -> BSockAddr
     {- ^ The cluster address of the new peer. -}
-  -> ClusterPropState
-    {- ^ The current cluster propagation state. -}
-  -> ClusterPropState
-joinCluster peer addy =
-  ClusterPropState
-  . P.event (PeerJoined peer addy)
-  . P.participate peer
-  . unPropState
+  -> ClusterPowerStateT m ()
+joinCluster peer addy = do
+  PM.participate peer
+  PM.event (Change (PeerJoined peer addy))
+
+
+{- | Mark the current rebalance action as complete. -}
+finishRebalance :: (Monad m) => ClusterPowerStateT m ()
+finishRebalance = PM.event Complete
 
 
 {- |
   Eject a peer from the cluster.
 -}
-eject :: Peer -> ClusterPropState -> ClusterPropState
-eject peer =
-  ClusterPropState
-  . P.event (PeerEjected peer)
-  . P.disassociate peer
-  . unPropState
+eject :: (Monad m) => Peer -> ClusterPowerStateT m ()
+eject peer = do
+  PM.event (Change (PeerEjected peer))
+  PM.disassociate peer
 
 
 {- |
-  Merge a foreign cluster state with our own cluster state. This function
-  returns the new cluster propagation state, along with a set of partition keys
-  for which the default participation has changed (aka, a rebalance happened),
-  indicating that some action should be taken to migrate the indicated
-  partitions.
+  Get the current rebalance action, along with its ordinal. This is
+  taken from the infimum, so it may not reflect projected changes.
 -}
-mergeEither
-  :: Peer
-  -> ClusterPowerState
-  -> ClusterPropState
-  -> Either
-      (DifferentOrigins UUID)
-      ((ClusterPropState, Map (StateId Peer) ()), KeySet)
-mergeEither otherPeer (ClusterPowerState otherPS) (ClusterPropState prop) =
-  let
-    self = P.getSelf prop
-    divergences = P.divergences self (P.initProp otherPeer otherPS)
-    migrating = unions [
-        ks
-        | (_, Participating _ ks) <- Map.toList divergences
-      ]
-  in case P.mergeEither otherPeer otherPS prop of
-    Left err -> Left err
-    Right (merged, outputs) ->
-      Right ((ClusterPropState merged, outputs), migrating)
-
-
-{- |
-  Get the peers which require action (i.e. Send), if any, and the
-  powerstate version to send to those peers, and the new propagation
-  state that is applicable after those actions have been taken.
--}
-actions :: ClusterPropState -> (Set Peer, ClusterPowerState, ClusterPropState)
-actions prop =
-  let (peers, ps, newProp) = P.actions (unPropState prop)
-  in (peers, ClusterPowerState ps, ClusterPropState newProp)
-
-
-{- |
-  Return all cluster participants.
--}
-allParticipants :: ClusterPropState -> Set Peer
-allParticipants = P.allParticipants . unPropState
-
-
-{- |
-  Move time forward for the propagation state.
--}
-heartbeat :: UTCTime -> ClusterPropState -> ClusterPropState
-heartbeat now = ClusterPropState . P.heartbeat now . unPropState
-
+nextAction :: ClusterPowerState -> (RebalanceOrd, RebalanceAction)
+nextAction cluster =
+  let ClusterState {peers, distribution, rebalanceOrd} = PS.infimumValue cluster
+  in (rebalanceOrd, fst (rebalanceAction (Map.keysSet peers) distribution))
 
