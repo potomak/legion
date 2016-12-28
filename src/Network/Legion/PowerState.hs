@@ -380,7 +380,8 @@ divergent PowerState {
     accum j d ((_, (UnJoin p, a)):moreDeltas) =
       let
         j2 = Set.delete p j
-        d2 = (j2 \\ a) `union` d
+        {- A participant must acknowledge its own unjoin. -}
+        d2 = (j \\ a) `union` d
       in
         accum j2 d2 moreDeltas
 
