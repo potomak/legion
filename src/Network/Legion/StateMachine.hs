@@ -86,6 +86,7 @@ import Network.Legion.Distribution (Peer, rebalanceAction, newPeer,
 import Network.Legion.Index (IndexRecord(IndexRecord), stTag, stKey,
   irTag, irKey, SearchTag(SearchTag), indexEntries, Indexable)
 import Network.Legion.KeySet (KeySet, union)
+import Network.Legion.Lift (lift2)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PartitionState (PartitionPowerState, PartitionPropState)
 import Network.Legion.PowerState (Event, apply, StateId)
@@ -156,7 +157,7 @@ newtype SM e o s m a = SM {
   }
   deriving (Functor, Applicative, Monad, MonadLogger)
 instance MonadTrans (SM e o s) where
-  lift = SM . lift . lift
+  lift = SM . lift2
 
 
 {- |
@@ -517,13 +518,5 @@ savePartition key partition = SM $ do
 {- | Borrowed from 'lens', like @flip fmap@. -}
 (<&>) :: (Functor f) => f a -> (a -> b) -> f b
 (<&>) = flip fmap
-
-
-{- | Lift from two levels down in a monad transformation stack. -}
-lift2
-  :: (MonadTrans a, MonadTrans b, Monad m, Monad (b m))
-  => m r
-  -> a (b m) r
-lift2 = lift . lift
 
 

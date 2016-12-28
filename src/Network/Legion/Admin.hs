@@ -26,6 +26,7 @@ import Network.Legion.Application (LegionConstraints)
 import Network.Legion.Conduit (chanToSource)
 import Network.Legion.Distribution (Peer)
 import Network.Legion.LIO (LIO)
+import Network.Legion.Lift (lift2)
 import Network.Legion.PartitionKey (PartitionKey(K))
 import Network.Legion.PartitionState (PartitionPowerState)
 import Network.Legion.StateMachine (NodeState)
@@ -84,7 +85,7 @@ runAdmin addr host = do
       :: Chan (AdminMessage e o s)
       -> ((a -> LIO ()) -> AdminMessage e o s)
       -> ActionT Text LIO a
-    send chan msg = lift . lift $ do
+    send chan msg = lift2 $ do
       mvar <- newEmptyMVar
       writeChan chan (msg (lift . putMVar mvar))
       takeMVar mvar

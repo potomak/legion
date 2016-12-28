@@ -37,6 +37,7 @@ library
     Network.Legion.Index
     Network.Legion.KeySet
     Network.Legion.LIO
+    Network.Legion.Lift
     Network.Legion.PartitionKey
     Network.Legion.PartitionState
     Network.Legion.PowerState
