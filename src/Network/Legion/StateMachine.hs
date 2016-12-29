@@ -226,7 +226,38 @@ clusterMerge foreignCluster = do
 
 {- | Eject a peer from the cluster.  -}
 eject :: (MonadLogger m, MonadThrow m) => Peer -> SM e o s m ()
-eject peer = runClusterPowerStateT (C.eject peer)
+eject peer = do
+  {-
+    We need to think very hard about the split brain problem. A random
+    thought about that is that we should consider the extreme case where
+    the network just fails completely and every node believes that every
+    other node should be or has been ejected. This would obviously be
+    catastrophic in terms of data durability unless we have some way to
+    reintegrate an ejected node. So, either we have to guarantee that
+    such a situation can never happen, or else implement a reintegration
+    strategy.  It might be acceptable for the reintegration strategy to
+    be very costly if it is characterized as an extreme recovery scenario.
+
+    Question: would a reintegration strategy become less costly if the
+    "next state id" for a peer were global across all power states
+    instead of local to each power state?
+  -}
+  runClusterPowerStateT (C.eject peer)
+  {-
+    'runClusterPowerStateT (C.eject peer)' will cause us to attempt to
+    notify the peer that they have been ejected, but that notification
+    is almost certainly going to go unacknowledged because the peer
+    is probably down.
+    
+    This call to 'eject' was presumably invoked as a result of user
+    action, and we must therefore trust the user to know that the peer
+    is really down and not coming back. This "guarantee" allows us to
+    acknowledge the ejection on the peer's behalf.
+
+    This call will acknowledge the drop on behalf of the peer, and also
+    remove that peer from the keyspace distribution map.
+  -}
+  runClusterPowerStateTAs peer (return ())
 
 
 {- | Handle a peer join request.  -}
@@ -492,35 +523,65 @@ runPartitionPowerStateT :: (
   -> PartitionPowerStateT e o s (SM e o s m) a
   -> SM e o s m (a, PartitionPowerState e o s)
 runPartitionPowerStateT key m = do
+    NodeState {self} <- getNodeState
+    partition <- getPartition key
+    PM.runPowerStateT self partition (
+        m <* (removeObsolete >> PM.acknowledge)
+      ) >>= \case
+        Left err -> throwM err
+        Right (a, action, partition2, _infOutputs) -> do
+          case action of
+            Send -> pushActions [
+                PartitionMerge p key partition2
+                | p <- Set.toList (PS.allParticipants partition2)
+                , p /= self
+              ]
+            DoNothing -> return ()
+          $(logDebug) . pack
+            $ "Partition update: " ++ show partition
+            ++ " --> " ++ show partition2 ++ " :: " ++ show action
+          savePartition key partition2
+          return (a, partition2)
+  where
+    {- |
+      Remove obsolete peers. Obsolete peers are peers that are no longer
+      participating in the replication of this partition, due to a
+      rebalance. Such peers are removed lazily here at read time.
+    -}
+    removeObsolete :: (Eq e, Event e o s, Monad m)
+      => PartitionPowerStateT e o s (SM e o s m) ()
+    removeObsolete = do
+      owners <- C.findOwners key . cluster <$> lift getNodeState
+      peers <- PS.projParticipants <$> PM.getPowerState
+      let obsolete = peers \\ owners
+      mapM_
+        (\peer -> PM.disassociate peer >> PM.acknowledgeAs peer)
+        (Set.toList obsolete)
+
+
+{- | Like 'runClusterPowerStateTAs', but run as the local peer. -}
+runClusterPowerStateT :: (MonadThrow m)
+  => ClusterPowerStateT (SM e o s m) a
+  -> SM e o s m a
+runClusterPowerStateT m = do
   NodeState {self} <- getNodeState
-  partition <- getPartition key
-  PM.runPowerStateT self partition (m <* PM.acknowledge) >>= \case
-    Left err -> throwM err
-    Right (a, action, partition2, _infOutputs) -> do
-      case action of
-        Send -> pushActions [
-            PartitionMerge p key partition2
-            | p <- Set.toList (PS.allParticipants partition2)
-            , p /= self
-          ]
-        DoNothing -> return ()
-      $(logDebug) . pack
-        $ "Partition update: " ++ show partition
-        ++ " --> " ++ show partition2 ++ " :: " ++ show action
-      savePartition key partition2
-      return (a, partition2)
+  runClusterPowerStateTAs self m
 
 
 {- |
   Run a clusterstate-flavored 'PowerStateT' in the 'SM' monad,
   automatically acknowledging the resulting power state.
+
+  Generalized to run as any peer, in order to support exceptional cases
+  like 'eject'.
 -}
-runClusterPowerStateT :: (MonadThrow m)
-  => ClusterPowerStateT (SM e o s m) a
+runClusterPowerStateTAs :: (MonadThrow m)
+  => Peer {- ^ The peer to run as. -}
+  -> ClusterPowerStateT (SM e o s m) a
   -> SM e o s m a
-runClusterPowerStateT m = do
+runClusterPowerStateTAs as m = do
   NodeState {cluster, self} <- getNodeState
-  PM.runPowerStateT self cluster (m <* PM.acknowledge) >>= \case
+  PM.runPowerStateT as cluster (m <* PM.acknowledge) >>= \case
     Left err -> throwM err
     Right (a, action, cluster2, _outputs) -> do
       case action of
