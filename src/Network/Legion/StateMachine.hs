@@ -501,6 +501,7 @@ runPartitionPowerStateT key m = do
         Send -> pushActions [
             PartitionMerge p key partition2
             | p <- Set.toList (PS.allParticipants partition2)
+            , p /= self
           ]
         DoNothing -> return ()
       $(logDebug) . pack
@@ -526,6 +527,7 @@ runClusterPowerStateT m = do
         Send -> pushActions [
             ClusterMerge p cluster2
             | p <- Set.toList (PS.allParticipants cluster2)
+            , p /= self
           ]
         DoNothing -> return ()
       modifyNodeState (\ns -> ns {cluster = cluster2})
