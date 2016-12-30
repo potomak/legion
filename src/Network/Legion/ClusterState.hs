@@ -71,12 +71,14 @@ instance Default ClusterState where
       rebalanceOrd = minBound
     }
 instance ToJSON ClusterState where
-  toJSON ClusterState {distribution, peers} = object [
-      "distribution" .= distribution,
+  toJSON (ClusterState distribution_ peers_ updates_ rebalanceOrd_) = object [
+      "distribution" .= distribution_,
       "peers" .= Map.fromList [
           (show p, show a)
-          | (p, a) <- Map.toList peers
-        ]
+          | (p, a) <- Map.toList peers_
+        ],
+      "updates" .= (show <$> updates_),
+      "rebalanceOrd" .= show rebalanceOrd_
     ]
 instance Show ClusterState where
   show = T.unpack . decodeUtf8 . LBS.toStrict . encode
