@@ -15,6 +15,9 @@ module Network.Legion.PowerState.Monad (
   event,
   merge,
   acknowledge,
+  acknowledgeAs,
+
+  getPowerState,
 
   participate,
   disassociate,
@@ -127,18 +130,30 @@ merge other = PowerStateT $ do
 -}
 acknowledge :: (Monad m, Ord p, Event e r s, Eq e, Eq o)
   => PowerStateT o s p e r m ()
-acknowledge = PowerStateT $ do
+acknowledge = PowerStateT (lift2 ask) >>= acknowledgeAs
+
+
+{- | Like 'acknowledge', but for an arbigrary participant. -}
+acknowledgeAs :: (Monad m, Ord p, Event e r s, Eq e, Eq o)
+  => p
+  -> PowerStateT o s p e r m ()
+acknowledgeAs p = PowerStateT $ do
   ps <- get
   prop <- lift get
-  self <- lift2 ask
   let
-    (ps2, outputs) = PS.acknowledge self ps
+    (ps2, outputs) = PS.acknowledge p ps
     prop2 = if ps2 /= ps
       then Send
       else prop
   put ps2
   (lift . put) prop2
   (lift3 . tell) outputs
+
+
+{- | Return the current value of the power state. -}
+getPowerState :: (Monad m, Ord p)
+  => PowerStateT o s p e r m (PowerState o s p e r)
+getPowerState = PowerStateT get
 
 
 {- |

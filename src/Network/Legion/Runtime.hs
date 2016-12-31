@@ -399,29 +399,6 @@ handleMessage {- Admin Get Partition -}
 handleMessage {- Admin Eject Peer -}
     (A (Eject peer respond))
   = do
-    {-
-      TODO: we should attempt to notify the ejected peer that it has
-      been ejected instead of just cutting it off and washing our hands
-      of it. I have a vague notion that maybe ejected peers should be
-      permanently recorded in the cluster state so that if they ever
-      reconnect then we can notify them that they are no longer welcome
-      to participate.
-
-      On a related note, we need to think very hard about the split brain
-      problem. A random thought about that is that we should consider the
-      extreme case where the network just fails completely and every node
-      believes that every other node should be or has been ejected. This
-      would obviously be catastrophic in terms of data durability unless
-      we have some way to reintegrate an ejected node. So, either we
-      have to guarantee that such a situation can never happen, or else
-      implement a reintegration strategy.  It might be acceptable for
-      the reintegration strategy to be very costly if it is characterized
-      as an extreme recovery scenario.
-
-      Question: would a reintegration strategy become less costly if the
-      "next state id" for a peer were global across all power states
-      instead of local to each power state?
-    -}
     eject peer
     lift2 $ respond ()
 

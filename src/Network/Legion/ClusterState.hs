@@ -47,6 +47,7 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Network.Legion.Distribution as D
+import qualified Network.Legion.KeySet as KS
 import qualified Network.Legion.PowerState as PS
 import qualified Network.Legion.PowerState.Monad as PM
 
@@ -71,12 +72,14 @@ instance Default ClusterState where
       rebalanceOrd = minBound
     }
 instance ToJSON ClusterState where
-  toJSON ClusterState {distribution, peers} = object [
-      "distribution" .= distribution,
+  toJSON (ClusterState distribution_ peers_ updates_ rebalanceOrd_) = object [
+      "distribution" .= distribution_,
       "peers" .= Map.fromList [
           (show p, show a)
-          | (p, a) <- Map.toList peers
-        ]
+          | (p, a) <- Map.toList peers_
+        ],
+      "updates" .= (show <$> updates_),
+      "rebalanceOrd" .= show rebalanceOrd_
     ]
 instance Show ClusterState where
   show = T.unpack . decodeUtf8 . LBS.toStrict . encode
@@ -124,12 +127,17 @@ instance Event Update () ClusterState where
 popUpdate :: ClusterState -> ClusterState
 popUpdate cs@ClusterState {updates, distribution, peers} =
   case (updates, rebalanceAction (Map.keysSet peers) distribution) of
-    (u:moreUpdates, (NoAction, _)) -> popUpdate cs {
-        peers = case u of
-          PeerJoined peer addr -> Map.insert peer addr peers
-          PeerEjected peer -> Map.delete peer peers,
-        updates = moreUpdates
-      }
+    (u:moreUpdates, (NoAction, _)) -> popUpdate $
+      case u of
+        PeerJoined peer addr -> cs {
+            peers = Map.insert peer addr peers,
+            updates = moreUpdates
+          }
+        PeerEjected peer -> cs {
+            distribution = D.modify (Set.delete peer) KS.full distribution,
+            peers = Map.delete peer peers,
+            updates = moreUpdates
+          }
     _ -> cs
 
 

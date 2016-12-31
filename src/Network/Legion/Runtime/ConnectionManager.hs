@@ -15,7 +15,7 @@ module Network.Legion.Runtime.ConnectionManager (
 import Prelude hiding (lookup)
 
 import Control.Concurrent (Chan, writeChan, newChan, readChan)
-import Control.Exception (try, SomeException)
+import Control.Exception (try, SomeException, bracketOnError)
 import Control.Monad (void)
 import Control.Monad.Logger (logInfo, logWarn)
 import Control.Monad.Trans.Class (lift)
@@ -102,14 +102,20 @@ connection addr = do
     handle chan so =
       lift (readChan chan) >>= sendWithRetry so . encode >>= handle chan
 
-    {- |
-      Open a socket.
-    -}
+    {- | Open a socket. -}
     openSocket :: IO Socket
-    openSocket = do
-      so <- socket (fam addr) Stream defaultProtocol
-      connect so addr
-      return so
+    openSocket =
+      {-
+        Make sure to close the socket if an error happens during
+        connection, because if not, we could easily run out of file
+        descriptors in the case where we rapidly try to send thousands
+        of message to the same peer, which could happen when one object
+        is a hotspot.
+      -}
+      bracketOnError
+        (socket (fam addr) Stream defaultProtocol)
+        close
+        (\so -> connect so addr >> return so)
 
     {- |
       Try to send the payload over the socket, and if that fails, then try to
@@ -122,7 +128,7 @@ connection addr = do
         Left err -> do
           $(logWarn) . pack
             $ "Can't connect to: " ++ show addr ++ ". Dropping message on "
-            ++ "the floor: " ++ show payload ++ ". The error was: "
+            ++ "the floor. The error was: "
             ++ show (err :: SomeException)
           return Nothing
         Right so -> do
@@ -132,8 +138,7 @@ connection addr = do
               $ "An error happend when trying to send a payload over a socket "
               ++ "to the address: " ++ show addr ++ ". The error was: "
               ++ show (err :: SomeException) ++ ". This is the last straw, we "
-              ++ "are not retrying. The message is being dropped on the floor. "
-              ++ "The message was: " ++ show payload
+              ++ "are not retrying. The message is being dropped on the floor."
             Right _ -> return ()
           return (Just so)
     sendWithRetry (Just so) payload =
