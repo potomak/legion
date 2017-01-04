@@ -753,7 +753,7 @@ data RuntimeState e o s = RuntimeState {
 
 
 {- | This is the type of a join request message. -}
-data JoinRequest = JoinRequest BSockAddr
+newtype JoinRequest = JoinRequest BSockAddr
   deriving (Generic, Show)
 instance Binary JoinRequest
 

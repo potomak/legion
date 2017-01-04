@@ -36,7 +36,7 @@ import Network.Socket.ByteString.Lazy (sendAll)
 {- |
   A handle on the connection manager
 -}
-data ConnectionManager e o s = C (Chan (Message e o s))
+newtype ConnectionManager e o s = C (Chan (Message e o s))
 instance Show (ConnectionManager e o s) where
   show _ = "ConnectionManager"
 
@@ -188,7 +188,7 @@ newPeers cm peers =
 {- |
   The internal state of the connection manager.
 -}
-data State e o s = S {
+newtype State e o s = S {
     connections :: Map Peer (Chan (PeerMessage e o s))
   }
 
