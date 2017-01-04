@@ -29,13 +29,14 @@ module Network.Legion.PowerState (
 
 import Prelude hiding (null)
 
-import Data.Aeson (ToJSON, toJSON, object, (.=))
+import Data.Aeson (ToJSON, toJSON, object, (.=), Value(String))
 import Data.Binary (Binary(put, get))
 import Data.Default.Class (Default(def))
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
 import Data.Map (Map, filterWithKey, unionWith, minViewWithKey, keys,
   toDescList, toAscList, fromAscList)
 import Data.Set (Set, union, (\\), null, member)
+import Data.Text (pack)
 import Data.Word (Word64)
 import GHC.Generics (Generic)
 import qualified Data.Map as Map
@@ -52,7 +53,7 @@ data PowerState o s p d = PowerState {
      deltas :: Map (StateId p) (Delta p d, Set p)
   } deriving (Generic, Show, Eq)
 instance (Binary o, Binary s, Binary p, Binary d) => Binary (PowerState o s p d)
-instance (Show o, Show s, Show p, Show d) => ToJSON (PowerState o s p d) where
+instance (Show o, ToJSON s, Show p, Show d, ToJSON p) => ToJSON (PowerState o s p d) where
   toJSON PowerState {origin, infimum, deltas} = object [
       "origin" .= show origin,
       "infimum" .= infimum,
@@ -77,11 +78,11 @@ instance (Eq p) => Eq (Infimum s p) where
   Infimum s1 _ _ == Infimum s2 _ _ = s1 == s2
 instance (Ord p) => Ord (Infimum s p) where
   compare (Infimum s1 _ _) (Infimum s2 _ _) = compare s1 s2
-instance (Show s, Show p) => ToJSON (Infimum s p) where
+instance (ToJSON s, ToJSON p) => ToJSON (Infimum s p) where
   toJSON Infimum {stateId, participants, stateValue} = object [
-      "stateId" .= show stateId,
-      "participants" .= Set.map show participants,
-      "stateValue" .= show stateValue
+      "stateId" .= stateId,
+      "participants" .= participants,
+      "stateValue" .= stateValue
     ]
 
 
@@ -109,6 +110,12 @@ instance (Binary p) => Binary (StateId p) where
       Just (a, b, c, d, p) -> Sid (Word256 (Word128 a b) (Word128 c d)) p
 instance Default (StateId p) where
   def = BottomSid
+instance (ToJSON p) => ToJSON (StateId p) where
+  toJSON BottomSid = String "BottomSid"
+  toJSON (Sid w x) = object [
+      "sid" .= (String . pack $ show w),
+      "operation" .= toJSON x
+    ]
 
 
 {- |
@@ -441,5 +448,3 @@ nextId p PowerState {infimum = Infimum {stateId}, deltas} =
   case maximum (stateId:keys deltas) of
     BottomSid -> Sid 0 p
     Sid ord _ -> Sid (succ ord) p
-
-

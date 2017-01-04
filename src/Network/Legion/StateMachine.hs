@@ -110,20 +110,20 @@ data NodeState i s = NodeState {
         migration :: KeySet,
           nsIndex :: Set IndexRecord
   }
-instance (Show i, Show s) => Show (NodeState i s) where
+instance (Show i, ToJSON s) => Show (NodeState i s) where
   show = unpack . decodeUtf8 . toStrict . encode
 {-
   The ToJSON instance is mainly for debugging. The Haskell-generated 'Show'
   instance is very hard to read.
 -}
-instance (Show i, Show s) => ToJSON (NodeState i s) where
+instance (Show i, ToJSON s) => ToJSON (NodeState i s) where
   toJSON (NodeState self cluster partitions migration nsIndex) =
     object [
-              "self" .= show self,
+              "self" .= self,
            "cluster" .= cluster,
-        "partitions" .= Map.mapKeys show partitions,
+        "partitions" .= Map.keys partitions,
          "migration" .= show migration,
-           "nsIndex" .= show nsIndex
+           "nsIndex" .= nsIndex
       ]
 
 
@@ -514,5 +514,3 @@ lift3
   => m r
   -> a (b (c m)) r
 lift3 = lift . lift . lift
-
-

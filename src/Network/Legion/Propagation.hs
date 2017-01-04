@@ -71,15 +71,15 @@ data PropState o s p d = PropState {
           self :: p,
            now :: Time
   } deriving (Eq, Show)
-instance (Show o, Show s, Show p, Show d) => ToJSON (PropState o s p d) where
+instance (Show o, ToJSON s, Show p, Show d, ToJSON p) => ToJSON (PropState o s p d) where
   toJSON PropState {powerState, peerStates, self, now} = object [
       "powerState" .= powerState,
       "peerStates" .= Map.fromList [
           (show p, show s)
           | (p, s) <- Map.toList peerStates
         ],
-      "self" .= show self,
-      "now" .= show now
+      "self" .= self,
+      "now" .= now
     ]
 
 
@@ -91,7 +91,7 @@ instance (Show o, Show s, Show p, Show d) => ToJSON (PropState o s p d) where
 -}
 newtype PropPowerState o s p d = PropPowerState {
     unPowerState :: PowerState o s p d
-  } deriving (Show, Binary)
+  } deriving (Show, Binary, ToJSON)
 
 
 {- |
@@ -388,5 +388,3 @@ infimum = PS.infimumValue . unPowerState
 idle :: (Ord p) => PropState o s p d -> Bool
 idle PropState {powerState, peerStates} =
   Map.null peerStates && Set.null (divergent powerState)
-
-

@@ -16,6 +16,7 @@ import Control.Concurrent (forkIO, newChan, newEmptyMVar, writeChan,
 import Control.Monad (void)
 import Control.Monad.Logger (askLoggerIO, runLoggingT, logDebug)
 import Control.Monad.Trans.Class (lift)
+import Data.Aeson (ToJSON)
 import Data.Conduit (Source)
 import Data.Default.Class (def)
 import Data.Text.Encoding (encodeUtf8)
@@ -36,15 +37,16 @@ import Network.Wai.Middleware.AddHeaders (addHeaders)
 import Network.Wai.Middleware.StripHeaders (stripHeader)
 import Paths_legion (version)
 import Text.Read (readMaybe)
+import Web.Scotty.Format.Trans (respondTo, formatText, formatJson)
 import Web.Scotty.Resource.Trans (resource, get, delete)
-import Web.Scotty.Trans (Options, scottyOptsT, settings, ScottyT, text,
+import Web.Scotty.Trans (Options, scottyOptsT, settings, ScottyT, text, json,
   ActionT, param, middleware, status)
 import qualified Data.Text as T
 
 {- |
   Start the admin service in a background thread.
 -}
-runAdmin :: (LegionConstraints i o s)
+runAdmin :: (LegionConstraints i o s, ToJSON s)
   => Port
   -> HostPreference
   -> LIO (Source LIO (AdminMessage i o s))
@@ -63,12 +65,16 @@ runAdmin addr host = do
           resource "/clusterstate" $
             get $ do
               val <- send chan GetState
-              text (pack (show val))
+              respondTo $ do
+                formatJson $ json val
+                formatText $ text (pack (show val))
           resource "/propstate/:key" $
             get $ do
               key <- K . read <$> param "key"
               val <- send chan (GetPart key)
-              text (pack (show val))
+              respondTo $ do
+                formatJson $ json val
+                formatText $ text (pack (show val))
           resource "/peers/:peer" $
             delete $
               readMaybe <$> param "peer" >>= \case
@@ -136,5 +142,3 @@ instance Show (AdminMessage i o s) where
   show (GetState _) = "(GetState _)"
   show (GetPart k _) = "(GetPart " ++ show k ++ " _)"
   show (Eject p _) = "(Eject " ++ show p ++ " _)"
-
-

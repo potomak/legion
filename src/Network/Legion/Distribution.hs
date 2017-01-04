@@ -6,7 +6,7 @@
 -}
 module Network.Legion.Distribution (
   ParticipationDefaults,
-  Peer,
+  Peer(Peer),
   empty,
   modify,
   findPartition,
@@ -18,7 +18,7 @@ module Network.Legion.Distribution (
 
 import Prelude hiding (null)
 
-import Data.Aeson (ToJSON, toJSON, object, (.=))
+import Data.Aeson (ToJSON, toJSON, object, (.=), Value(String))
 import Data.Binary (Binary)
 import Data.Function (on)
 import Data.List (sort, sortBy)
@@ -38,9 +38,13 @@ import qualified Network.Legion.KeySet as KS
 {- |
   The way to identify a peer.
 -}
-newtype Peer = Peer UUID deriving (Show, Binary, Eq, Ord)
+newtype Peer = Peer UUID deriving (Binary, Eq, Ord)
 instance Read Peer where
   readPrec = Peer <$> readPrec
+instance Show Peer where
+  show (Peer uuid) = show uuid
+instance ToJSON Peer where
+  toJSON = String . pack . show
 
 
 {- |
@@ -169,5 +173,3 @@ newPeer = Peer <$> getUUID
 -- -}
 -- t :: (Show a) => String -> a -> a
 -- t msg a = trace (msg ++ ": " ++ show a) a
-
-

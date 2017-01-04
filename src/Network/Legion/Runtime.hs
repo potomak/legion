@@ -26,6 +26,7 @@ import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Logger (logWarn, logError, logInfo, LoggingT,
   MonadLoggerIO, runLoggingT, askLoggerIO, logDebug)
 import Control.Monad.Trans.Class (lift)
+import Data.Aeson (ToJSON)
 import Data.Binary (encode, Binary)
 import Data.Conduit (Source, ($$), (=$=), yield, await, awaitForever,
   transPipe, ConduitM, runConduit, Sink)
@@ -83,7 +84,7 @@ import qualified Network.Legion.StateMachine as SM
   request source, and to handle the responses. Unless you know exactly
   what you are doing, you probably want to use `forkLegionary` instead.
 -}
-runLegionary :: (LegionConstraints i o s)
+runLegionary :: (LegionConstraints i o s, ToJSON s)
   => Legionary i o s
     {- ^ The user-defined legion application to run.  -}
   -> LegionarySettings
@@ -330,7 +331,7 @@ handleMessage {- Search Dispatch -}
           No identical search is currently being executed, kick off a
           new one.
         -}
-        (mcss, ns2) <- runSM legionary ns minimumCompleteServiceSet 
+        (mcss, ns2) <- runSM legionary ns minimumCompleteServiceSet
         rts2 <- foldr (>=>) return (sendOne <$> Set.toList mcss) rts
         return (
             rts2 {
@@ -367,7 +368,7 @@ handleMessage {- Search Execution -}
     (P (PeerMessage source _ (Search searchTag)))
     (rts@RuntimeState {nextId, cm, self}, ns)
   = do
-    (output, ns2) <- runSM legionary ns (SM.search searchTag) 
+    (output, ns2) <- runSM legionary ns (SM.search searchTag)
     send cm source (PeerMessage self nextId (SearchResponse searchTag output))
     return (rts {nextId = nextMessageId nextId}, ns2)
 
@@ -697,7 +698,7 @@ fam SockAddrCan {} = AF_CAN
   Forks the legion framework in a background thread, and returns a way to
   send user requests to it and retrieve the responses to those requests.
 -}
-forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io)
+forkLegionary :: (LegionConstraints i o s, MonadLoggerIO io, ToJSON s)
   => Legionary i o s
     {- ^ The user-defined legion application to run. -}
   -> LegionarySettings
@@ -829,5 +830,3 @@ instance Binary JoinResponse
 {- | Lookup a key from a map, and also delete the key if it exists. -}
 lookupDelete :: (Ord k) => k -> Map k v -> (Maybe v, Map k v)
 lookupDelete = Map.updateLookupWithKey (const (const Nothing))
-
-

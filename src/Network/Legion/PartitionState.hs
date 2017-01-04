@@ -45,7 +45,7 @@ import qualified Network.Legion.Propagation as P
 -}
 newtype PartitionPowerState i s = PartitionPowerState {
     unPowerState :: PropPowerState PartitionKey s Peer i
-  } deriving (Show, Binary)
+  } deriving (Show, Binary, ToJSON)
 
 
 {- |
@@ -190,5 +190,3 @@ infimum = P.infimum . unPowerState
 -}
 idle :: PartitionPropState i s -> Bool
 idle = P.idle . unPropState
-
-

@@ -8,6 +8,7 @@ module Network.Legion.PartitionKey (
 ) where
 
 
+import Data.Aeson (ToJSON, toJSON, Value(String))
 import Data.Attoparsec.ByteString (parseOnly, atEnd)
 import Data.Attoparsec.ByteString.Char8 (hexadecimal)
 import Data.Binary (Binary(put, get))
@@ -16,6 +17,7 @@ import Data.Bool (bool)
 import Data.ByteString.Char8 (pack)
 import Data.DoubleWord (Word256(Word256), Word128(Word128))
 import Data.Ranged (DiscreteOrdered(adjacent, adjacentBelow))
+import qualified Data.Text as T
 import Data.Word (Word64)
 
 
@@ -31,6 +33,9 @@ instance Binary PartitionKey where
 instance DiscreteOrdered PartitionKey where
   adjacent (K a) (K b) = a < b && succ a == b
   adjacentBelow (K k) = if k == minBound then Nothing else Just (K (pred k))
+
+instance ToJSON PartitionKey where
+  toJSON (K key) = String . T.pack $ show key
 
 
 {- | Convert a `PartitionKey` into a hex string. -}
@@ -85,5 +90,3 @@ fromHex str
       atEnd >>= bool
         (fail "not a valid hex string")
         (return w)
-
-

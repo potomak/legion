@@ -34,7 +34,7 @@ import Data.Time.Clock (UTCTime)
 import Data.UUID (UUID)
 import GHC.Generics (Generic)
 import Network.Legion.BSockAddr (BSockAddr(BSockAddr))
-import Network.Legion.Distribution (ParticipationDefaults, modify, Peer)
+import Network.Legion.Distribution (ParticipationDefaults, modify, Peer(Peer))
 import Network.Legion.KeySet (KeySet, full, unions)
 import Network.Legion.PartitionKey (PartitionKey)
 import Network.Legion.PowerState (ApplyDelta(apply))
@@ -65,8 +65,8 @@ instance ToJSON ClusterState where
   toJSON ClusterState {distribution, peers} = object [
       "distribution" .= distribution,
       "peers" .= Map.fromList [
-          (show p, show a)
-          | (p, a) <- Map.toList peers
+          (show uuid, a)
+          | (Peer uuid, a) <- Map.toList peers
         ]
     ]
 
@@ -249,5 +249,3 @@ allParticipants = P.allParticipants . unPropState
 -}
 heartbeat :: UTCTime -> ClusterPropState -> ClusterPropState
 heartbeat now = ClusterPropState . P.heartbeat now . unPropState
-
-

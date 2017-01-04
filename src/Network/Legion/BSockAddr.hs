@@ -5,7 +5,9 @@ module Network.Legion.BSockAddr (
   BSockAddr(..)
 ) where
 
+import Data.Aeson (ToJSON, toJSON, Value(String))
 import Data.Binary (Binary(put, get))
+import Data.Text (pack)
 import Data.Word (Word8)
 import Network.Socket (SockAddr(SockAddrInet, SockAddrInet6, SockAddrUnix,
   SockAddrCan))
@@ -13,6 +15,8 @@ import Network.Socket (SockAddr(SockAddrInet, SockAddrInet6, SockAddrUnix,
 
 {- | A type useful only for creating a `Binary` instance of `SockAddr`.  -}
 newtype BSockAddr = BSockAddr {getAddr :: SockAddr} deriving (Show, Eq)
+instance ToJSON BSockAddr where
+  toJSON (BSockAddr address) = String . pack $ show address
 
 instance Binary BSockAddr where
   put (BSockAddr addr) =
@@ -46,5 +50,3 @@ instance Binary BSockAddr where
           $ "Can't decode BSockAddr because the constructor tag "
           ++ "was not understood. Probably this data is representing "
           ++ "something else."
-
-

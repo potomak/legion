@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 {- | This module contains types related to partition indexing. -}
 module Network.Legion.Index (
   Tag(..),
@@ -7,9 +8,11 @@ module Network.Legion.Index (
   SearchTag(..),
 ) where
 
+import Data.Aeson (ToJSON, Value(String), toJSON, object, (.=))
 import Data.Binary (Binary)
 import Data.ByteString (ByteString)
 import Data.String (IsString)
+import Data.Text (pack)
 import GHC.Generics (Generic)
 import Network.Legion.PartitionKey (PartitionKey)
 
@@ -29,6 +32,11 @@ data IndexRecord = IndexRecord {
   }
   deriving (Eq, Ord, Show, Generic)
 instance Binary IndexRecord
+instance ToJSON IndexRecord where
+  toJSON (IndexRecord tag key) = object [
+      "tag" .= (String . pack $ show tag),
+      "key" .= key
+    ]
 
 
 {- | This data structure describes where in the index to start scrolling. -}
@@ -38,5 +46,3 @@ data SearchTag = SearchTag {
   }
   deriving (Show, Eq, Ord, Generic)
 instance Binary SearchTag
-
-

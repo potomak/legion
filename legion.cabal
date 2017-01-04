@@ -70,6 +70,7 @@ library
     monad-logger >= 0.3.17 && < 0.4,
     network >= 2.6.2.1 && < 2.7,
     scotty >= 0.11.0 && < 0.12,
+    scotty-format >= 0.1 && < 0.2,
     scotty-resource >= 0.1 && < 0.2,
     stm >= 2.4.4.1 && < 2.5,
     text >= 1.2.2.0 && < 1.3,
@@ -83,4 +84,3 @@ library
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options: -Wall -W -fwarn-incomplete-uni-patterns
-
