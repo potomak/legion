@@ -24,6 +24,7 @@ import Data.Text.Encoding (encodeUtf8)
 import Data.Text.Lazy (Text)
 import Data.Version (showVersion)
 import Network.HTTP.Types (notFound404)
+import Network.Legion.Admin.TH (adminSite)
 import Network.Legion.Application (LegionConstraints)
 import Network.Legion.Conduit (chanToSource)
 import Network.Legion.Distribution (Peer)
@@ -64,6 +65,9 @@ runAdmin addr host = do
             $ requestLogging logging
             . setServer
             . logExceptionsAndContinue logging
+
+          {- automatically generate the admin site resources. -}
+          $$(adminSite)
 
           resource "/clusterstate" $
             get $ json =<< send chan GetState

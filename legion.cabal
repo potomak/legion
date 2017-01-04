@@ -17,6 +17,8 @@ stability:           experimental
 build-type:          Simple
 extra-source-files:
   README.md
+  admin/admin.js
+  admin/index.html
 cabal-version:       >=1.10
 
 source-repository head
@@ -28,6 +30,7 @@ library
     Network.Legion
   other-modules:
     Network.Legion.Admin
+    Network.Legion.Admin.TH
     Network.Legion.Application
     Network.Legion.BSockAddr
     Network.Legion.Basics
@@ -68,12 +71,16 @@ library
     data-dword         >= 0.3      && < 0.4,
     directory          >= 1.2.1.0  && < 1.3,
     exceptions         >= 0.8      && < 0.9,
+    filepath           >= 1.4.1.0  && < 1.5,
     http-types         >= 0.9.1    && < 0.10,
+    mime-types         >= 0.1.0.7  && < 0.2,
     monad-logger       >= 0.3.17   && < 0.4,
     network            >= 2.6.2.1  && < 2.7,
     scotty             >= 0.11.0   && < 0.12,
+    scotty-format      >= 0.1.1.0  && < 0.2,
     scotty-resource    >= 0.1      && < 0.3,
     stm                >= 2.4.4.1  && < 2.5,
+    template-haskell   >= 2.11.0.0 && < 2.12,
     text               >= 1.2.2.0  && < 1.3,
     transformers       >= 0.3.0.0  && < 0.6,
     unix               >= 2.7      && < 2.8,

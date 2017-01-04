@@ -8,5 +8,6 @@ extra-deps:
 - canteven-log-2.0.0.1
 - data-bword-0.1.0.1
 - data-dword-0.3.1
+- scotty-format-0.1.1.0
 - scotty-resource-0.2.0.0
 resolver: lts-7.1
