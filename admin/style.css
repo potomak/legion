@@ -1,0 +1,12 @@
+html, body {
+  font-family: 'Menlo', monospace;
+  color: #333;
+}
+
+a, a:active {
+  color: #666;
+}
+
+a:visited {
+  color: #999;
+}
